@@ -1,0 +1,6 @@
+{
+  "top1_accuracy": 0.0398,
+  "top5_accuracy": 0.1301,
+  "mean_distance_top1": 0.018180036917328835,
+  "median_distance_top1": 0.013636112213134766
+}
