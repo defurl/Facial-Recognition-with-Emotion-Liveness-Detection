@@ -23,7 +23,7 @@ def analyze_emotion_and_liveness(img_path):
     """
     try:
         # , detector_backend='retinaface'
-        analysis = DeepFace.analyze(img_path, actions=['emotion'], anti_spoofing=True)
+        analysis = DeepFace.analyze(img_path, actions=['emotion'], backend='retinaface',anti_spoofing=True)
 
         result = analysis[0] if isinstance(analysis, list) else analysis
         em = result.get('dominant_emotion') or (result.get('emotion') or {}).get('dominant')

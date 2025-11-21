@@ -1,6 +1,8 @@
 import cv2
 import os
+import numpy as np
 from pathlib import Path
+from datetime import datetime
 import mediapipe as mp
 
 # ============= Face Detection =============
@@ -135,6 +137,162 @@ def draw_face_box(frame, x, y, w, h, label, color=(0, 255, 0), thickness=2):
     cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX,
                0.7, color, thickness)
     return frame
+
+
+# ============= Face Quality Validation =============
+
+# Initialize MediaPipe Face Mesh for landmark detection
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh_detector = mp_face_mesh.FaceMesh(
+    static_image_mode=True,
+    max_num_faces=1,
+    refine_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+
+
+def calculate_blur_score(image):
+    """
+    Calculate blur score using Laplacian variance.
+    
+    Args:
+        image: BGR or grayscale image
+    
+    Returns:
+        float: Blur score (higher = sharper, lower = blurrier)
+    """
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+    
+    # Calculate Laplacian variance
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    variance = laplacian.var()
+    return variance
+
+
+def check_brightness(image):
+    """
+    Check if image brightness is within acceptable range.
+    
+    Args:
+        image: BGR image
+    
+    Returns:
+        tuple: (is_valid, brightness_value, message)
+    """
+    # Convert to grayscale and calculate mean brightness
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+    
+    brightness = np.mean(gray)
+    
+    if brightness < 40:
+        return False, brightness, "Too dark"
+    elif brightness > 220:
+        return False, brightness, "Too bright"
+    else:
+        return True, brightness, "OK"
+
+
+def check_frontal_pose(image):
+    """
+    Check if face is in frontal pose using MediaPipe Face Mesh landmarks.
+    
+    Args:
+        image: BGR image (cropped face)
+    
+    Returns:
+        tuple: (is_frontal, message)
+    """
+    try:
+        # Convert BGR to RGB
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = face_mesh_detector.process(rgb_image)
+        
+        if not results.multi_face_landmarks:
+            return False, "No face landmarks detected"
+        
+        landmarks = results.multi_face_landmarks[0].landmark
+        
+        # Get key landmarks for pose estimation
+        # Left eye outer corner: 33, Right eye outer corner: 263
+        # Nose tip: 1, Left mouth corner: 61, Right mouth corner: 291
+        left_eye = landmarks[33]
+        right_eye = landmarks[263]
+        nose_tip = landmarks[1]
+        left_mouth = landmarks[61]
+        right_mouth = landmarks[291]
+        
+        # Calculate face width at eye level
+        eye_width = abs(right_eye.x - left_eye.x)
+        
+        # Calculate horizontal symmetry (nose should be centered)
+        nose_to_left = abs(nose_tip.x - left_eye.x)
+        nose_to_right = abs(right_eye.x - nose_tip.x)
+        symmetry_ratio = min(nose_to_left, nose_to_right) / max(nose_to_left, nose_to_right)
+        
+        # Calculate mouth symmetry
+        mouth_width = abs(right_mouth.x - left_mouth.x)
+        mouth_to_eye_ratio = mouth_width / eye_width if eye_width > 0 else 0
+        
+        # Frontal pose criteria:
+        # 1. Nose should be roughly centered (symmetry ratio > 0.8)
+        # 2. Mouth width should be proportional to eye width (0.6 to 1.2)
+        is_frontal = symmetry_ratio > 0.75 and 0.5 < mouth_to_eye_ratio < 1.3
+        
+        if not is_frontal:
+            if symmetry_ratio <= 0.75:
+                return False, "Face camera directly (head turned)"
+            else:
+                return False, "Adjust face angle"
+        
+        return True, "OK"
+        
+    except Exception as e:
+        # If landmark detection fails, be conservative
+        return False, f"Pose check failed: {str(e)}"
+
+
+def validate_registration_quality(cropped_face, all_faces_count):
+    """
+    Comprehensive validation of face quality for registration.
+    
+    Args:
+        cropped_face: BGR image of cropped face
+        all_faces_count: Total number of faces detected in frame
+    
+    Returns:
+        tuple: (is_valid, message)
+    """
+    # Check 1: Multiple faces
+    if all_faces_count > 1:
+        return False, "MULTIPLE FACES - Only one person allowed"
+    
+    # Check 2: Image size
+    if cropped_face.size == 0 or cropped_face.shape[0] < 50 or cropped_face.shape[1] < 50:
+        return False, "Face too small"
+    
+    # Check 3: Blur detection
+    blur_score = calculate_blur_score(cropped_face)
+    if blur_score < 100:
+        return False, f"Too blurry (score: {blur_score:.1f})"
+    
+    # Check 4: Brightness
+    is_bright_ok, brightness, brightness_msg = check_brightness(cropped_face)
+    if not is_bright_ok:
+        return False, brightness_msg
+    
+    # Check 5: Frontal pose
+    is_frontal, pose_msg = check_frontal_pose(cropped_face)
+    if not is_frontal:
+        return False, pose_msg
+    
+    return True, "OK"
 
 
 if __name__ == "__main__":

@@ -35,8 +35,10 @@ from config import (
 )
 from models import FaceEmbeddingCNN
 from data_loader import get_transforms
-from utils import detect_faces, crop_face_with_padding
+from utils import detect_faces, crop_face_with_padding, validate_registration_quality
 from emotion import analyze_emotion_and_liveness
+from datetime import datetime
+import csv
 
 # Global variables
 verification_model = None
@@ -85,15 +87,83 @@ def load_model_and_database():
     # Load transforms
     _, val_transform = get_transforms()
     
-    # Load database
+    # Load database with backward compatibility
     if EMPLOYEE_DB_PATH.exists():
-        employee_db = torch.load(EMPLOYEE_DB_PATH)
+        loaded_db = torch.load(EMPLOYEE_DB_PATH)
+        employee_db = {}
+        
+        # Convert old format to new format if needed
+        for name, data in loaded_db.items():
+            if isinstance(data, torch.Tensor):
+                # Old format: just a single embedding tensor
+                print(f"    • {name} (converting old format)")
+                employee_db[name] = {
+                    'embeddings': [data],
+                    'average': data,
+                    'timestamp': datetime.now().isoformat()
+                }
+            elif isinstance(data, dict):
+                # New format: already has structure
+                print(f"    • {name} (multi-capture: {len(data.get('embeddings', []))} samples)")
+                employee_db[name] = data
+            else:
+                print(f"    ⚠ Skipping {name}: unknown format")
+        
         print(f"✓ Loaded {len(employee_db)} employees from database")
-        for name in employee_db:
-            print(f"    • {name}")
     else:
         print("ℹ No existing employee database. Starting fresh.")
         employee_db = {}
+
+
+# ============= Attendance Logging Helper Functions =============
+
+def should_log_attendance(name, attendance_log, time_window_seconds=300):
+    """
+    Check if attendance should be logged (prevent duplicates within time window).
+    
+    Args:
+        name: Employee name
+        attendance_log: List of attendance records
+        time_window_seconds: Duplicate prevention window (default: 5 minutes)
+    
+    Returns:
+        bool: True if should log, False if duplicate
+    """
+    if not name or name in ["Not Registered", "Spoof Detected", "Error", "Unknown"]:
+        return False
+    
+    now = datetime.now()
+    
+    # Check for recent entries from same person
+    for record in reversed(attendance_log):  # Check from most recent
+        if record['name'] == name:
+            time_diff = (now - datetime.fromisoformat(record['timestamp'])).total_seconds()
+            if time_diff < time_window_seconds:
+                return False  # Duplicate within time window
+            break  # Found most recent, no need to check older
+    
+    return True
+
+
+def save_attendance_to_csv(attendance_log, file_path):
+    """
+    Save attendance log to CSV file.
+    
+    Args:
+        attendance_log: List of attendance records
+        file_path: Path to CSV file
+    """
+    try:
+        file_path.parent.mkdir(exist_ok=True)
+        
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['name', 'timestamp', 'confidence', 'emotion', 'liveness'])
+            writer.writeheader()
+            writer.writerows(attendance_log)
+        
+        print(f"✓ Attendance log saved to {file_path}")
+    except Exception as e:
+        print(f"⚠ Error saving attendance log: {e}")
 
 
 class AttendanceSystemGUI:
@@ -117,14 +187,22 @@ class AttendanceSystemGUI:
         # Processing control
         self.frame_count = 0
         self.PROCESS_EVERY_N_FRAMES = PROCESS_EVERY_N_FRAMES
-        self.last_emotion = "Neutral"
-        self.last_liveness = "Unknown"
-        self.last_identity = "Not Registered"
-        self.last_distance = float('inf')
+        
+        # Multi-face tracking (per-face results instead of global state)
+        self.face_results = []  # List of dicts with identity, emotion, liveness per face
         
         # Registration mode
         self.registration_mode = False
         self.registration_name = ""
+        self.registration_captures = []  # Store multiple embeddings during registration
+        self.registration_target_count = 5  # Number of captures to collect
+        self.registration_poses = ["Look straight", "Tilt head left", "Tilt head right", "Look straight again", "Final capture"]
+        self.registration_last_capture_time = 0
+        
+        # Attendance logging
+        self.attendance_log = []  # In-memory log
+        self.attendance_log_path = OUTPUT_DIR / "attendance_log.csv"
+        self.load_attendance_log()
         
         # Thread-safe queue for frames
         self.frame_queue = queue.Queue(maxsize=2)
@@ -164,6 +242,43 @@ class AttendanceSystemGUI:
         self.style.configure('Card.TLabelFrame.Label', 
                            font=('Arial', 11, 'bold'), 
                            foreground='#2c3e50')
+    
+    def load_attendance_log(self):
+        """Load attendance log from CSV file"""
+        try:
+            if self.attendance_log_path.exists():
+                with open(self.attendance_log_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    self.attendance_log = list(reader)
+                print(f"✓ Loaded {len(self.attendance_log)} attendance records")
+            else:
+                print("ℹ No existing attendance log. Starting fresh.")
+        except Exception as e:
+            print(f"⚠ Error loading attendance log: {e}")
+    
+    def log_attendance(self, name, confidence, emotion, liveness):
+        """
+        Log attendance for a recognized employee.
+        
+        Args:
+            name: Employee name
+            confidence: Recognition confidence (0-1)
+            emotion: Detected emotion
+            liveness: Liveness status
+        """
+        if should_log_attendance(name, self.attendance_log):
+            record = {
+                'name': name,
+                'timestamp': datetime.now().isoformat(),
+                'confidence': f"{confidence:.3f}",
+                'emotion': emotion,
+                'liveness': liveness
+            }
+            self.attendance_log.append(record)
+            save_attendance_to_csv(self.attendance_log, self.attendance_log_path)
+            print(f"✓ Logged attendance: {name} at {record['timestamp']}")
+            return True
+        return False
     
     def setup_ui(self):
         """Setup the modern user interface"""
@@ -464,10 +579,10 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         tk.Label(instructions, text="📋 Registration Instructions:", 
                 font=('Arial', 10, 'bold'), fg='#27ae60', bg='#e8f5e8').pack(anchor=tk.W, padx=10, pady=(10, 5))
 
-        inst_text = """• Make sure you have good lighting\n• Look directly at the camera\n• Keep your face centered and still\n• Registration will happen automatically"""
+        inst_text = """• Ensure only ONE person in frame\n• Make sure you have good lighting\n• Follow on-screen pose instructions\n• System will capture 5 images automatically\n• Keep face clear (no glasses during capture)"""
 
         tk.Label(instructions, text=inst_text, font=('Arial', 9), 
-                fg='#2d5a2d', bg='#e8f5e8', justify=tk.LEFT, height=6).pack(anchor=tk.W, padx=10, pady=(0, 10))
+                fg='#2d5a2d', bg='#e8f5e8', justify=tk.LEFT, height=7).pack(anchor=tk.W, padx=10, pady=(0, 10))
         
         def start_registration_process():
             name = name_var.get().strip()
@@ -481,7 +596,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             self.registration_mode = True
             self.registration_name = name
-            self.status_text.set(f"🔵 Registration mode: Position '{name}' in front of camera...")
+            self.registration_captures = []  # Reset captures
+            self.registration_last_capture_time = 0
+            self.status_text.set(f"🔵 Registration: '{name}' - Capture 0/{self.registration_target_count}")
             dialog.destroy()
         
         # Buttons
@@ -495,51 +612,89 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         dialog.bind('<Return>', lambda e: start_registration_process())
     
     def register_employee(self, frame):
-        """Register a new employee from frame"""
+        """
+        Register a new employee from frame with multi-capture and quality validation.
+        Collects multiple embeddings for robust recognition.
+        """
+        current_time = time.time()
+        
+        # Enforce 1-second interval between captures
+        if current_time - self.registration_last_capture_time < 1.0:
+            return False
+        
         faces = detect_faces(frame)
         
+        # Validate face detection
         if len(faces) == 0:
-            self.status_text.set("Registration failed: No face detected")
-            self.registration_mode = False
+            self.status_text.set(f"Registration: No face detected - {len(self.registration_captures)}/{self.registration_target_count}")
+            return False
+        
+        if len(faces) > 1:
+            self.status_text.set(f"Registration BLOCKED: Multiple faces detected! Only one person allowed.")
             return False
         
         x, y, w, h = faces[0]
         cropped_face = crop_face_with_padding(frame, x, y, w, h)
         
-        if cropped_face.size == 0 or cropped_face.shape[0] < 50:
-            self.status_text.set("Registration failed: Face too small")
-            self.registration_mode = False
+        # Quality validation
+        is_valid, validation_msg = validate_registration_quality(cropped_face, len(faces))
+        
+        if not is_valid:
+            self.status_text.set(f"Registration: {validation_msg} - {len(self.registration_captures)}/{self.registration_target_count}")
             return False
         
-        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
-        temp_path = "temp_reg_face.jpg"
-        cv2.imwrite(temp_path, cropped_face_resized)
-        
+        # Passed validation - capture this frame
         try:
-            pil_image = Image.open(temp_path).convert('RGB')
+            cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+            
+            # Convert to PIL and get embedding
+            rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb).convert('RGB')
             image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
             
             with torch.no_grad():
-                embedding = verification_model(image_tensor, mode='metric')
+                embedding = verification_model(image_tensor, mode='metric').cpu()
             
-            employee_db[self.registration_name] = embedding.cpu()
+            # Store this capture
+            self.registration_captures.append(embedding)
+            self.registration_last_capture_time = current_time
+            
+            capture_count = len(self.registration_captures)
+            
+            # Get pose instruction for next capture
+            if capture_count < self.registration_target_count:
+                next_pose = self.registration_poses[capture_count] if capture_count < len(self.registration_poses) else "Continue"
+                self.status_text.set(f"✓ Captured {capture_count}/{self.registration_target_count} - {next_pose}")
+                print(f"✓ Capture {capture_count}/{self.registration_target_count}: {validation_msg}")
+                return False  # Continue registration
+            
+            # All captures complete - save to database
+            avg_embedding = torch.mean(torch.stack(self.registration_captures), dim=0)
+            
+            employee_db[self.registration_name] = {
+                'embeddings': self.registration_captures,
+                'average': avg_embedding,
+                'timestamp': datetime.now().isoformat()
+            }
             torch.save(employee_db, EMPLOYEE_DB_PATH)
             
-            print(f"✓ Registered '{self.registration_name}'")
-            self.status_text.set(f"Successfully registered '{self.registration_name}'!")
-            messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!")
+            print(f"✓ Registered '{self.registration_name}' with {len(self.registration_captures)} embeddings")
+            self.status_text.set(f"✓ Successfully registered '{self.registration_name}'!")
+            messagebox.showinfo("Success", 
+                              f"Employee '{self.registration_name}' registered successfully!\n"
+                              f"Captured {len(self.registration_captures)} quality samples.")
+            
+            self.registration_mode = False
+            self.registration_captures = []
+            return True
             
         except Exception as e:
             print(f"Registration error: {e}")
             self.status_text.set(f"Registration error: {str(e)}")
             messagebox.showerror("Error", f"Registration failed: {str(e)}")
-            return False
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             self.registration_mode = False
-        
-        return True
+            self.registration_captures = []
+            return False
     
     def capture_frames(self):
         """Capture and process video frames (runs in background thread)"""
@@ -552,84 +707,148 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             frame = cv2.flip(frame, 1)
             self.frame_count += 1
             
+            # Registration mode
             if self.registration_mode:
+                capture_num = len(self.registration_captures)
+                pose_instruction = self.registration_poses[capture_num] if capture_num < len(self.registration_poses) else "Hold still"
+                
                 cv2.putText(frame, f"REGISTERING: {self.registration_name}", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                cv2.putText(frame, "Hold still...", 
+                cv2.putText(frame, f"Capture {capture_num}/{self.registration_target_count}: {pose_instruction}", 
                            (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 if self.frame_count % 30 == 0:
                     self.register_employee(frame)
             
+            # Detect all faces in frame
             faces = detect_faces(frame)
-
-            for (x, y, w, h) in faces:
-                box_color = (0, 255, 0)
-
+            
+            # Multi-face security check for attendance
+            multiple_faces_detected = len(faces) > 1
+            
+            if multiple_faces_detected and not self.registration_mode:
+                # Display prominent warning overlay
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (frame.shape[1], 100), (0, 0, 255), -1)
+                frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+                
+                cv2.putText(frame, "⚠ MULTIPLE FACES DETECTED ⚠", 
+                           (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                cv2.putText(frame, "ATTENDANCE BLOCKED - Only one person allowed", 
+                           (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            
+            # Clear face results for this frame
+            self.face_results = []
+            
+            # Process each detected face
+            for face_idx, (x, y, w, h) in enumerate(faces):
+                box_color = (0, 255, 0)  # Default green
+                identity = "Processing..."
+                emotion = "Unknown"
+                liveness = "Unknown"
+                distance = float('inf')
+                
+                # Heavy processing only on specific frames and not in registration mode
                 if self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0 and not self.registration_mode:
-                    cropped_face = crop_face_with_padding(frame, x, y, w, h)
+                    
+                    # Block processing if multiple faces detected
+                    if multiple_faces_detected:
+                        identity = "BLOCKED"
+                        emotion = "N/A"
+                        liveness = "N/A"
+                        box_color = (0, 0, 255)  # Red for blocked
+                    else:
+                        # Single face - safe to process
+                        cropped_face = crop_face_with_padding(frame, x, y, w, h)
 
-                    if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
-                        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+                        if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
+                            cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
 
-                        # DeepFace-based emotion + liveness
-                        try:
-                            rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                            emo, is_live = analyze_emotion_and_liveness(rgb_face)
-                            self.last_emotion = emo
-                            self.last_liveness = 'Real' if is_live else 'Spoof'
-                        except Exception as e:
-                            print(f"DeepFace analyze error: {e}")
-                            is_live = True
-                            self.last_liveness = 'N/A'
-
-                        if not is_live:
-                            self.last_identity = "Spoof Detected"
-                            box_color = (0, 0, 255)
-                        else:
-                            # Verification
+                            # Emotion + Liveness detection
                             try:
-                                # Avoid disk I/O: convert cv2 image to PIL directly
-                                rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
-                                pil_image = Image.fromarray(rgb).convert('RGB')
-                                image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+                                rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                                emo, is_live = analyze_emotion_and_liveness(rgb_face)
+                                emotion = emo
+                                liveness = 'Real' if is_live else 'Spoof'
+                            except Exception as e:
+                                print(f"DeepFace analyze error: {e}")
+                                is_live = True
+                                liveness = 'N/A'
 
-                                with torch.no_grad():
-                                    trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+                            if not is_live:
+                                identity = "Spoof Detected"
+                                box_color = (0, 0, 255)  # Red
+                            else:
+                                # Identity Verification with multi-embedding support
+                                try:
+                                    rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+                                    pil_image = Image.fromarray(rgb).convert('RGB')
+                                    image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
 
-                                min_distance = float('inf')
-                                self.last_identity = "Not Registered"
-                                best_match = None
+                                    with torch.no_grad():
+                                        trial_embedding = verification_model(image_tensor, mode='metric').cpu()
 
-                                for name, saved_embedding in employee_db.items():
-                                    distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
-                                    if distance < min_distance:
-                                        min_distance = distance
-                                        best_match = name
+                                    min_distance = float('inf')
+                                    best_match = None
 
-                                if min_distance < OPTIMAL_THRESHOLD_GUI:
-                                    self.last_identity = best_match
-                                    box_color = (0, 255, 0)
-                                else:
-                                    self.last_identity = "Not Registered"
+                                    # Compare against all employees
+                                    for name, employee_data in employee_db.items():
+                                        # Support both old (single tensor) and new (dict) formats
+                                        if isinstance(employee_data, dict):
+                                            embeddings_list = employee_data.get('embeddings', [employee_data.get('average')])
+                                        else:
+                                            embeddings_list = [employee_data]
+                                        
+                                        # Compare against all embeddings for this employee
+                                        for saved_embedding in embeddings_list:
+                                            dist = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                                            if dist < min_distance:
+                                                min_distance = dist
+                                                best_match = name
+
+                                    distance = min_distance
+                                    
+                                    if min_distance < OPTIMAL_THRESHOLD_GUI:
+                                        identity = best_match
+                                        box_color = (0, 255, 0)  # Green
+                                        
+                                        # Log attendance (with duplicate prevention)
+                                        confidence = 1.0 - (min_distance / 2.0)  # Convert distance to confidence
+                                        self.log_attendance(identity, confidence, emotion, liveness)
+                                    else:
+                                        identity = "Not Registered"
+                                        box_color = (0, 0, 255)  # Red
+
+                                except Exception as e:
+                                    print(f"Verification error: {e}")
+                                    identity = "Error"
                                     box_color = (0, 0, 255)
-
-                                self.last_distance = min_distance
-                            except Exception:
-                                self.last_identity = "Error"
-                        # no temp file used for verification
-
-                display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                
+                # Store per-face results
+                face_result = {
+                    'bbox': (x, y, w, h),
+                    'identity': identity,
+                    'emotion': emotion,
+                    'liveness': liveness,
+                    'distance': distance,
+                    'box_color': box_color
+                }
+                self.face_results.append(face_result)
+                
+                # Draw annotations for this specific face
+                display_text = f"{identity} ({emotion} | {liveness})"
                 cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
                 cv2.putText(frame, display_text, (x, y-10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
                 
-                # Update statistics
-                self.recognition_stats['total_detections'] += 1
-                if self.last_identity != "Not Registered" and self.last_identity != "Error":
-                    self.recognition_stats['successful_recognitions'] += 1
-                    self.recognition_stats['unique_faces_today'].add(self.last_identity)
+                # Update statistics (only for successful non-blocked recognitions)
+                if not multiple_faces_detected:
+                    self.recognition_stats['total_detections'] += 1
+                    if identity not in ["Not Registered", "Error", "Spoof Detected", "Processing...", "BLOCKED"]:
+                        self.recognition_stats['successful_recognitions'] += 1
+                        self.recognition_stats['unique_faces_today'].add(identity)
 
+            # Send frame to display queue
             if not self.frame_queue.full():
                 try:
                     self.frame_queue.put_nowait(frame)
@@ -665,20 +884,44 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.window.after(33, self.update_display)
     
     def update_detection_display(self):
-        """Update the detection information display"""
-        if self.last_identity != "Not Registered" and self.last_identity != "Error":
+        """Update the detection information display using per-face results"""
+        # Get the most recent face result (primary face)
+        if self.face_results:
+            primary_face = self.face_results[0]  # Use first detected face for display
+            identity = primary_face['identity']
+            emotion = primary_face['emotion']
+            liveness = primary_face['liveness']
+            distance = primary_face['distance']
+        else:
+            identity = "Not Registered"
+            emotion = "Neutral"
+            liveness = "Unknown"
+            distance = float('inf')
+        
+        # Update identity display
+        if identity not in ["Not Registered", "Error", "BLOCKED", "Processing...", "Spoof Detected"]:
             # Successful recognition
-            self.identity_label.config(text=f"✅ {self.last_identity}", 
+            self.identity_label.config(text=f"✅ {identity}", 
                                      bg='#d5f4e6', fg='#27ae60')
-            status_text = f"🟢 Recognition successful: {self.last_identity}"
-        elif self.last_identity == "Error":
+            status_text = f"🟢 Recognition successful: {identity}"
+        elif identity == "Error":
             # Error state
             self.identity_label.config(text="❌ Recognition Error", 
                                      bg='#fdeaea', fg='#e74c3c')
             status_text = "🔴 Error occurred during recognition"
+        elif identity == "BLOCKED":
+            # Multiple faces blocked
+            self.identity_label.config(text="⚠ MULTIPLE FACES BLOCKED", 
+                                     bg='#fdeaea', fg='#e74c3c')
+            status_text = "🔴 Multiple faces detected - attendance blocked"
+        elif identity == "Spoof Detected":
+            # Spoof detected
+            self.identity_label.config(text="⚠ Spoof Detected", 
+                                     bg='#fdeaea', fg='#e74c3c')
+            status_text = "🔴 Liveness check failed"
         else:
             # Unknown person or no face
-            if self.last_identity == "Not Registered":
+            if identity == "Not Registered":
                 self.identity_label.config(text="❓ Unknown Person", 
                                          bg='#fff3cd', fg='#856404')
                 status_text = "🟡 Face detected but not recognized"
@@ -688,25 +931,22 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 status_text = "⭕ No face in camera view"
         
         # Update individual components
-        self.emotion_var.set(self.last_emotion)
-        self.liveness_var.set(self.last_liveness)
+        self.emotion_var.set(emotion)
+        self.liveness_var.set(liveness)
         
         # Color-code liveness
-        if self.last_liveness == "Real":
+        if liveness == "Real":
             self.liveness_label.config(fg='#27ae60')
-        elif self.last_liveness == "Spoof":
+        elif liveness == "Spoof":
             self.liveness_label.config(fg='#e74c3c')
         else:
             self.liveness_label.config(fg='#3498db')
         
-        # Update distance
-        if self.last_distance != float('inf'):
-            self.distance_var.set(f"{self.last_distance:.3f}")
+        # Update distance display
+        if distance != float('inf'):
+            self.distance_var.set(f"{distance:.3f}")
         else:
             self.distance_var.set("N/A")
-        
-        # Update status
-        self.status_text.set(status_text)
     
     def adjust_threshold(self):
         """Adjust verification threshold with enhanced dialog"""
