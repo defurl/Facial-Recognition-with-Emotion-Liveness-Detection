@@ -31,7 +31,8 @@ import torch.nn.functional as F
 
 from config import (
     DEVICE, IMG_SIZE, EMPLOYEE_DB_PATH, MODEL_METRIC_PATH,
-    OPTIMAL_THRESHOLD_GUI, PROCESS_EVERY_N_FRAMES, CAMERA_INDEX, OUTPUT_DIR
+    OPTIMAL_THRESHOLD_GUI, PROCESS_EVERY_N_FRAMES, CAMERA_INDEX, OUTPUT_DIR,
+    PRIMARY_FACE_AREA_WEIGHT, PRIMARY_FACE_CENTER_WEIGHT, USE_MULTI_EMBEDDING
 )
 from models import FaceEmbeddingCNN
 from data_loader import get_transforms
@@ -96,6 +97,65 @@ def load_model_and_database():
         employee_db = {}
 
 
+def select_primary_face(faces, frame_width, frame_height):
+    """
+    Select primary face from multiple detections using area and centeredness scoring.
+    
+    Args:
+        faces: List of (x, y, w, h) face bounding boxes
+        frame_width: Frame width in pixels
+        frame_height: Frame height in pixels
+    
+    Returns:
+        int: Index of primary face, or -1 if no faces
+    """
+    if not faces or len(faces) == 0:
+        return -1
+    
+    if len(faces) == 1:
+        return 0
+    
+    try:
+        # Calculate frame center
+        frame_center_x = frame_width / 2
+        frame_center_y = frame_height / 2
+        frame_diagonal = (frame_width**2 + frame_height**2) ** 0.5
+        
+        # Find largest face area for normalization
+        max_area = 0
+        for x, y, w, h in faces:
+            area = w * h
+            if area > max_area:
+                max_area = area
+        
+        # Score each face
+        scores = []
+        for x, y, w, h in faces:
+            area = w * h
+            
+            # Area score (normalized)
+            area_score = area / max_area if max_area > 0 else 0.0
+            
+            # Centeredness score (distance from center, inverted)
+            face_center_x = x + w / 2
+            face_center_y = y + h / 2
+            distance_from_center = ((face_center_x - frame_center_x)**2 + 
+                                   (face_center_y - frame_center_y)**2) ** 0.5
+            center_score = 1.0 - (distance_from_center / frame_diagonal)
+            center_score = max(0.0, center_score)
+            
+            # Weighted combination (60% area, 40% centeredness)
+            final_score = PRIMARY_FACE_AREA_WEIGHT * area_score + PRIMARY_FACE_CENTER_WEIGHT * center_score
+            scores.append(final_score)
+        
+        # Return index of highest scoring face
+        primary_idx = scores.index(max(scores))
+        return primary_idx
+    except Exception as e:
+        print(f"Error selecting primary face: {e}")
+        return -1 if not faces else 0
+
+
 class AttendanceSystemGUI:
     """Modern GUI application for face recognition attendance system"""
     
@@ -121,10 +181,12 @@ class AttendanceSystemGUI:
         self.last_liveness = "Unknown"
         self.last_identity = "Not Registered"
         self.last_distance = float('inf')
+        self.multiple_faces_warning = False
         
         # Registration mode
         self.registration_mode = False
         self.registration_name = ""
+        self.registration_state = None  # Will hold state machine data during registration
         
         # Thread-safe queue for frames
         self.frame_queue = queue.Queue(maxsize=2)
@@ -464,10 +526,10 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         tk.Label(instructions, text="📋 Registration Instructions:", 
                 font=('Arial', 10, 'bold'), fg='#27ae60', bg='#e8f5e8').pack(anchor=tk.W, padx=10, pady=(10, 5))
 
-        inst_text = """• Make sure you have good lighting\n• Look directly at the camera\n• Keep your face centered and still\n• Registration will happen automatically"""
+        inst_text = """• Look directly at the camera\n• Make sure you have good lighting\n• Keep your face centered and still\n• Follow the on-screen pose instructions\n• Hold each pose steady when prompted\n• Registration captures 5 different poses"""
 
         tk.Label(instructions, text=inst_text, font=('Arial', 9), 
-                fg='#2d5a2d', bg='#e8f5e8', justify=tk.LEFT, height=6).pack(anchor=tk.W, padx=10, pady=(0, 10))
+                fg='#2d5a2d', bg='#e8f5e8', justify=tk.LEFT, wraplength=350).pack(anchor=tk.W, padx=10, pady=(0, 10))
         
         def start_registration_process():
             name = name_var.get().strip()
@@ -479,9 +541,29 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 messagebox.showerror("❌ Duplicate Employee", f"Employee '{name}' is already registered!")
                 return
             
+            # Import config constants
+            from config import (
+                REGISTRATION_POSES_FULL, REGISTRATION_INSTRUCTIONS_FULL
+            )
+            
+            # Use 5 poses (center, left, right, up, down) for better coverage
+            # Skip the final "center again" from full mode
+            poses = REGISTRATION_POSES_FULL[:5]
+            instructions = REGISTRATION_INSTRUCTIONS_FULL[:5]
+            
             self.registration_mode = True
             self.registration_name = name
-            self.status_text.set(f"🔵 Registration mode: Position '{name}' in front of camera...")
+            self.registration_state = {
+                'step': 0,
+                'poses_required': poses,
+                'instructions': instructions,
+                'frames': [],
+                'embeddings': [],
+                'hold_frames': 0,
+                'last_check_frame': 0,
+                'completing': False  # Flag to prevent multiple completion calls
+            }
+            self.status_text.set(f"🔵 Step 1/{len(poses)}: {instructions[0]}")
             dialog.destroy()
         
         # Buttons
@@ -494,52 +576,88 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         # Bind Enter key
         dialog.bind('<Return>', lambda e: start_registration_process())
     
-    def register_employee(self, frame):
-        """Register a new employee from frame"""
-        faces = detect_faces(frame)
-        
-        if len(faces) == 0:
-            self.status_text.set("Registration failed: No face detected")
+    def complete_registration(self):
+        """Show thumbnail confirmation dialog and save embeddings"""
+        if not self.registration_state or len(self.registration_state['embeddings']) == 0:
+            messagebox.showerror("Error", "No registration data available")
             self.registration_mode = False
-            return False
+            return
         
-        x, y, w, h = faces[0]
-        cropped_face = crop_face_with_padding(frame, x, y, w, h)
+        dialog = tk.Toplevel(self.window)
+        dialog.title("✓ Review Registration")
+        dialog.geometry("600x500")
+        dialog.configure(bg='#f0f0f0')
+        dialog.transient(self.window)
+        dialog.grab_set()
         
-        if cropped_face.size == 0 or cropped_face.shape[0] < 50:
-            self.status_text.set("Registration failed: Face too small")
+        # Header
+        header = tk.Frame(dialog, bg='#27ae60', height=60)
+        header.pack(side=tk.TOP, fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text=f"✓ Review: {self.registration_name}",
+                font=('Arial', 14, 'bold'), bg='#27ae60', fg='white').pack(pady=15)
+        
+        # Thumbnail grid
+        canvas_frame = tk.Frame(dialog, bg='#f0f0f0')
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        num_poses = len(self.registration_state['frames'])
+        cols = 3
+        
+        for idx, (frame, instruction) in enumerate(zip(self.registration_state['frames'], 
+                                                       self.registration_state['instructions'])):
+            row = idx // cols
+            col = idx % cols
+            
+            # Convert frame to PhotoImage
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb_frame)
+            pil_img = pil_img.resize((150, 150))
+            photo = ImageTk.PhotoImage(pil_img)
+            
+            # Create thumbnail container
+            thumb_frame = tk.Frame(canvas_frame, bg='white', relief=tk.RAISED, borderwidth=2)
+            thumb_frame.grid(row=row, column=col, padx=10, pady=10)
+            
+            # Image label
+            img_label = tk.Label(thumb_frame, image=photo, bg='white')
+            img_label.image = photo  # Keep reference
+            img_label.pack()
+            
+            # Pose label
+            tk.Label(thumb_frame, text=instruction, font=('Arial', 8), 
+                    bg='white', fg='#2c3e50').pack(pady=5)
+        
+        # Buttons
+        button_frame = tk.Frame(dialog, bg='#f0f0f0')
+        button_frame.pack(side=tk.BOTTOM, pady=20)
+        
+        def save_to_database():
+            try:
+                # Save all embeddings as list
+                employee_db[self.registration_name] = self.registration_state['embeddings']
+                torch.save(employee_db, EMPLOYEE_DB_PATH)
+                
+                print(f"✓ Registered '{self.registration_name}' with {len(self.registration_state['embeddings'])} poses")
+                self.status_text.set(f"✓ Registered '{self.registration_name}' successfully!")
+                messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!")
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save: {e}")
+            finally:
+                self.registration_mode = False
+                self.registration_state = None
+        
+        def cancel_registration():
             self.registration_mode = False
-            return False
+            self.registration_state = None
+            self.status_text.set("Registration cancelled")
+            dialog.destroy()
         
-        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
-        temp_path = "temp_reg_face.jpg"
-        cv2.imwrite(temp_path, cropped_face_resized)
-        
-        try:
-            pil_image = Image.open(temp_path).convert('RGB')
-            image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
-            
-            with torch.no_grad():
-                embedding = verification_model(image_tensor, mode='metric')
-            
-            employee_db[self.registration_name] = embedding.cpu()
-            torch.save(employee_db, EMPLOYEE_DB_PATH)
-            
-            print(f"✓ Registered '{self.registration_name}'")
-            self.status_text.set(f"Successfully registered '{self.registration_name}'!")
-            messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!")
-            
-        except Exception as e:
-            print(f"Registration error: {e}")
-            self.status_text.set(f"Registration error: {str(e)}")
-            messagebox.showerror("Error", f"Registration failed: {str(e)}")
-            return False
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            self.registration_mode = False
-        
-        return True
+        ttk.Button(button_frame, text="✓ Save to Database", command=save_to_database,
+                  style='Success.TButton', width=20).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="✗ Cancel", command=cancel_registration,
+                  style='Danger.TButton', width=15).pack(side=tk.LEFT, padx=5)
     
     def capture_frames(self):
         """Capture and process video frames (runs in background thread)"""
@@ -552,21 +670,128 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             frame = cv2.flip(frame, 1)
             self.frame_count += 1
             
-            if self.registration_mode:
-                cv2.putText(frame, f"REGISTERING: {self.registration_name}", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                cv2.putText(frame, "Hold still...", 
-                           (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            if self.registration_mode and self.registration_state:
+                state = self.registration_state
+                current_step = state['step']
                 
-                if self.frame_count % 30 == 0:
-                    self.register_employee(frame)
+                if current_step >= len(state['poses_required']):
+                    # All poses captured, complete registration (once only)
+                    if not state.get('completing', False):
+                        state['completing'] = True
+                        self.window.after(100, self.complete_registration)
+                    # Don't process any more frames during completion
+                    continue
+                
+                # Display current step in top-right corner with background
+                h, w = frame.shape[:2]
+                instruction_text = f"Step {current_step + 1}/{len(state['poses_required'])}: {state['instructions'][current_step]}"
+                name_text = f"Registering: {self.registration_name}"
+                
+                # Calculate text sizes
+                (name_w, name_h), _ = cv2.getTextSize(name_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                (inst_w, inst_h), _ = cv2.getTextSize(instruction_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                
+                # Draw semi-transparent background box (moved higher to avoid blocking face)
+                overlay = frame.copy()
+                box_w = max(name_w, inst_w) + 30
+                box_h = name_h + inst_h + 30
+                y_offset = 50  # Start further down to avoid blocking top of frame
+                cv2.rectangle(overlay, (w - box_w - 10, y_offset), (w - 10, y_offset + box_h), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                
+                # Draw text
+                cv2.putText(frame, name_text, 
+                           (w - box_w, y_offset + 20 + name_h), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame, instruction_text, 
+                           (w - box_w, y_offset + 20 + name_h + inst_h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Check every 15 frames (~0.5 seconds at 30fps) to reduce flickering
+                if self.frame_count - state['last_check_frame'] >= 15:
+                    state['last_check_frame'] = self.frame_count
+                    
+                    faces = detect_faces(frame)
+                    if len(faces) == 0:
+                        cv2.putText(frame, "No face detected", (10, 100), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        state['hold_frames'] = 0
+                    else:
+                        x, y, w, h = faces[0]
+                        cropped_face = crop_face_with_padding(frame, x, y, w, h)
+                        
+                        if cropped_face.size == 0 or cropped_face.shape[0] < 50:
+                            cv2.putText(frame, "Face too small", (10, 100), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            state['hold_frames'] = 0
+                        else:
+                            # Import quality check functions
+                            from utils import check_image_blur, check_image_lighting
+                            
+                            # Quick quality checks
+                            blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=80)
+                            brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
+                            
+                            if blur_ok and lighting_ok:
+                                state['hold_frames'] += 1
+                                remaining = 12 - state['hold_frames']
+                                
+                                if remaining > 0:
+                                    cv2.putText(frame, f"✓ Hold steady... {remaining}", (10, 100), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                else:
+                                    # Capture this pose
+                                    cv2.putText(frame, "✓ Captured!", (10, 100), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                    
+                                    try:
+                                        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+                                        rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+                                        pil_image = Image.fromarray(rgb).convert('RGB')
+                                        image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+                                        
+                                        with torch.no_grad():
+                                            embedding = verification_model(image_tensor, mode='metric')
+                                        
+                                        state['frames'].append(cropped_face_resized.copy())
+                                        state['embeddings'].append(embedding.cpu())
+                                        state['step'] += 1
+                                        state['hold_frames'] = 0
+                                        
+                                        if state['step'] < len(state['poses_required']):
+                                            self.status_text.set(f"🔵 Step {state['step'] + 1}/{len(state['poses_required'])}: {state['instructions'][state['step']]}")
+                                    except Exception as e:
+                                        print(f"Capture error: {e}")
+                                        cv2.putText(frame, f"Error: {str(e)[:30]}", (10, 100), 
+                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            else:
+                                state['hold_frames'] = 0
+                                if not blur_ok:
+                                    cv2.putText(frame, "Image too blurry", (10, 100), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                                elif not lighting_ok:
+                                    cv2.putText(frame, "Poor lighting", (10, 100), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                else:
+                    # Show persistent hold counter between checks to reduce flickering
+                    if state.get('hold_frames', 0) > 0:
+                        remaining = max(0, 12 - state['hold_frames'])
+                        cv2.putText(frame, f"✓ Hold steady... {remaining}", (10, 100), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             faces = detect_faces(frame)
+            h, w = frame.shape[:2]
+            
+            # Track if multiple faces detected
+            self.multiple_faces_warning = len(faces) > 1
+            
+            # Select primary face if multiple faces  
+            primary_face_idx = select_primary_face(faces, w, h)
 
-            for (x, y, w, h) in faces:
-                box_color = (0, 255, 0)
+            for face_idx, (x, y, w, h) in enumerate(faces):
+                is_primary = (face_idx == primary_face_idx)
+                box_color = (128, 128, 128) if not is_primary else (0, 255, 0)
 
-                if self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0 and not self.registration_mode:
+                # Only process primary face  
+                if is_primary and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0 and not self.registration_mode:
                     cropped_face = crop_face_with_padding(frame, x, y, w, h)
 
                     if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
@@ -581,13 +806,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         except Exception as e:
                             print(f"DeepFace analyze error: {e}")
                             is_live = True
-                            self.last_liveness = 'N/A'
+                            self.last_liveness = 'Real'
 
                         if not is_live:
                             self.last_identity = "Spoof Detected"
                             box_color = (0, 0, 255)
                         else:
-                            # Verification
+                            # Verification with multi-embedding support
                             try:
                                 # Avoid disk I/O: convert cv2 image to PIL directly
                                 rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
@@ -601,8 +826,18 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 self.last_identity = "Not Registered"
                                 best_match = None
 
-                                for name, saved_embedding in employee_db.items():
-                                    distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                                # Multi-embedding comparison
+                                for name, saved_data in employee_db.items():
+                                    if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
+                                        # Compare against all stored embeddings, use minimum distance
+                                        distances = [F.pairwise_distance(trial_embedding, emb).item() 
+                                                   for emb in saved_data]
+                                        distance = min(distances) if distances else float('inf')
+                                    else:
+                                        # Single embedding (backward compatible)
+                                        saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
+                                        distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                                    
                                     if distance < min_distance:
                                         min_distance = distance
                                         best_match = name
@@ -615,20 +850,40 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     box_color = (0, 0, 255)
 
                                 self.last_distance = min_distance
-                            except Exception:
+                            except Exception as e:
+                                print(f"Verification error: {e}")
                                 self.last_identity = "Error"
-                        # no temp file used for verification
+                    else:
+                        self.last_identity = "Face too small"
+                        box_color = (0, 0, 255)
+                elif not is_primary:
+                    # Non-primary faces shown in gray
+                    self.last_identity = "Secondary Face"
 
-                display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                # Display proper label for each face
+                if is_primary:
+                    display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                else:
+                    display_text = "Secondary Face"
+                
                 cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
                 cv2.putText(frame, display_text, (x, y-10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
                 
-                # Update statistics
-                self.recognition_stats['total_detections'] += 1
-                if self.last_identity != "Not Registered" and self.last_identity != "Error":
-                    self.recognition_stats['successful_recognitions'] += 1
-                    self.recognition_stats['unique_faces_today'].add(self.last_identity)
+                # Update statistics (primary face only)
+                if is_primary:
+                    self.recognition_stats['total_detections'] += 1
+                    if self.last_identity not in ["Not Registered", "Error", "Spoof Detected", "Face too small", "Secondary Face"]:
+                        self.recognition_stats['successful_recognitions'] += 1
+                        self.recognition_stats['unique_faces_today'].add(self.last_identity)
+            
+            # Display warning banner if multiple faces detected
+            if self.multiple_faces_warning and len(faces) > 1:
+                warning_text = "⚠ Multiple faces detected - processing primary face only"
+                (tw, th), _ = cv2.getTextSize(warning_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                cv2.rectangle(frame, (0, 0), (tw + 20, th + 15), (0, 165, 255), -1)
+                cv2.putText(frame, warning_text, (10, th + 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             if not self.frame_queue.full():
                 try:

@@ -1,0 +1,279 @@
+"""
+Attendance logging system with CSV storage and cooldown management.
+"""
+
+import csv
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+import threading
+import time
+import pandas as pd
+
+
+class AttendanceLogger:
+    """
+    Manages attendance logging with CSV storage and cooldown prevention.
+    """
+    
+    def __init__(self, csv_path='outputs/attendance_log.csv', cooldown_minutes=60):
+        """
+        Initialize attendance logger.
+        
+        Args:
+            csv_path: Path to CSV file for logging
+            cooldown_minutes: Minimum minutes between attendance marks for same employee
+        """
+        self.csv_path = Path(csv_path)
+        self.cooldown_minutes = cooldown_minutes
+        self.lock = threading.Lock()
+        self.last_attendance = {}  # {employee_name: datetime}
+        
+        # Ensure output directory exists
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize CSV with headers if not exists
+        if not self.csv_path.exists():
+            self._create_csv()
+        else:
+            # Load existing attendance records to populate cooldown cache
+            self._load_recent_attendance()
+    
+    def _create_csv(self):
+        """Create CSV file with headers."""
+        try:
+            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['timestamp', 'employee_name', 'confidence_distance', 
+                                'emotion', 'liveness_status'])
+            print(f"Created attendance log: {self.csv_path}")
+        except Exception as e:
+            print(f"Error creating attendance CSV: {e}")
+    
+    def _load_recent_attendance(self):
+        """Load recent attendance records to initialize cooldown cache."""
+        try:
+            if not self.csv_path.exists():
+                return
+            
+            with open(self.csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        timestamp = datetime.fromisoformat(row['timestamp'])
+                        name = row['employee_name']
+                        
+                        # Only keep records within cooldown window
+                        if datetime.now() - timestamp <= timedelta(minutes=self.cooldown_minutes):
+                            if name not in self.last_attendance or timestamp > self.last_attendance[name]:
+                                self.last_attendance[name] = timestamp
+                    except (KeyError, ValueError) as e:
+                        continue  # Skip malformed rows
+        except Exception as e:
+            print(f"Error loading recent attendance: {e}")
+    
+    def can_mark_attendance(self, employee_name):
+        """
+        Check if employee can mark attendance (cooldown expired).
+        
+        Args:
+            employee_name: Name of employee
+        
+        Returns:
+            tuple: (can_mark: bool, reason: str)
+        """
+        with self.lock:
+            if employee_name not in self.last_attendance:
+                return (True, "OK")
+            
+            last_time = self.last_attendance[employee_name]
+            elapsed = datetime.now() - last_time
+            cooldown_delta = timedelta(minutes=self.cooldown_minutes)
+            
+            if elapsed >= cooldown_delta:
+                return (True, "OK")
+            else:
+                remaining = cooldown_delta - elapsed
+                minutes_left = int(remaining.total_seconds() / 60)
+                return (False, f"Cooldown active: {minutes_left} minutes remaining")
+    
+    def mark_attendance(self, employee_name, distance, emotion, liveness):
+        """
+        Mark attendance for employee if cooldown allows.
+        
+        Args:
+            employee_name: Name of employee
+            distance: Confidence distance value
+            emotion: Detected emotion
+            liveness: Liveness status ("Real" or "Spoof")
+        
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        try:
+            with self.lock:
+                # Check cooldown
+                can_mark, reason = self.can_mark_attendance(employee_name)
+                if not can_mark:
+                    return (False, reason)
+            
+            # Attempt to write with retry on lock
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    timestamp = datetime.now()
+                    
+                    # Append to CSV
+                    with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            timestamp.isoformat(),
+                            employee_name,
+                            f"{distance:.4f}",
+                            emotion,
+                            liveness
+                        ])
+                    
+                    # Update cooldown cache
+                    self.last_attendance[employee_name] = timestamp
+                    
+                    return (True, f"Attendance marked for {employee_name}")
+                    
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                    else:
+                        return (False, f"File locked: {e}")
+                except Exception as e:
+                    return (False, f"Error writing attendance: {e}")
+        except Exception as e:
+            return (False, f"Attendance marking error: {e}")
+    
+    def get_today_records(self):
+        """
+        Get all attendance records for today.
+        
+        Returns:
+            pandas.DataFrame: Today's attendance records
+        """
+        try:
+            if not self.csv_path.exists():
+                return pd.DataFrame(columns=['timestamp', 'employee_name', 'confidence_distance',
+                                            'emotion', 'liveness_status'])
+            
+            # Read CSV
+            df = pd.read_csv(self.csv_path)
+            
+            if df.empty:
+                return df
+            
+            # Parse timestamps and filter by today
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            today = datetime.now().date()
+            today_df = df[df['timestamp'].dt.date == today]
+            
+            return today_df
+            
+        except Exception as e:
+            print(f"Error reading today's records: {e}")
+            return pd.DataFrame()
+    
+    def generate_daily_summary(self):
+        """
+        Generate summary statistics for today's attendance.
+        
+        Returns:
+            dict: Summary statistics
+        """
+        try:
+            today_df = self.get_today_records()
+            
+            if today_df.empty:
+                return {
+                    'total_count': 0,
+                    'unique_employees': 0,
+                    'avg_confidence': 0.0,
+                    'liveness_real_count': 0,
+                    'liveness_spoof_count': 0
+                }
+            
+            # Calculate statistics
+            total_count = len(today_df)
+            unique_employees = today_df['employee_name'].nunique()
+            
+            # Average confidence (1 - distance)
+            # Assuming threshold is 0.8 for normalization
+            distances = pd.to_numeric(today_df['confidence_distance'], errors='coerce')
+            avg_distance = distances.mean() if not distances.isna().all() else 0.0
+            avg_confidence = max(0.0, 1 - (avg_distance / 0.8))
+            
+            # Liveness counts
+            liveness_real_count = (today_df['liveness_status'] == 'Real').sum()
+            liveness_spoof_count = (today_df['liveness_status'] == 'Spoof').sum()
+            
+            return {
+                'total_count': int(total_count),
+                'unique_employees': int(unique_employees),
+                'avg_confidence': float(avg_confidence),
+                'liveness_real_count': int(liveness_real_count),
+                'liveness_spoof_count': int(liveness_spoof_count)
+            }
+            
+        except Exception as e:
+            print(f"Error generating daily summary: {e}")
+            return {
+                'total_count': 0,
+                'unique_employees': 0,
+                'avg_confidence': 0.0,
+                'liveness_real_count': 0,
+                'liveness_spoof_count': 0
+            }
+    
+    def get_employee_attendance_today(self, employee_name):
+        """
+        Get attendance records for specific employee today.
+        
+        Args:
+            employee_name: Name of employee
+        
+        Returns:
+            pandas.DataFrame: Employee's attendance records today
+        """
+        try:
+            today_df = self.get_today_records()
+            if today_df.empty:
+                return today_df
+            
+            return today_df[today_df['employee_name'] == employee_name]
+        except Exception as e:
+            print(f"Error getting employee attendance: {e}")
+            return pd.DataFrame()
+
+
+if __name__ == "__main__":
+    # Test the attendance logger
+    print("Testing AttendanceLogger...")
+    
+    logger = AttendanceLogger(csv_path='outputs/test_attendance.csv', cooldown_minutes=1)
+    
+    # Test marking attendance
+    success, msg = logger.mark_attendance("John Doe", 0.35, "Happy", "Real")
+    print(f"First mark: {success}, {msg}")
+    
+    # Test cooldown
+    success, msg = logger.mark_attendance("John Doe", 0.32, "Neutral", "Real")
+    print(f"Immediate retry: {success}, {msg}")
+    
+    # Test another employee
+    success, msg = logger.mark_attendance("Jane Smith", 0.40, "Neutral", "Real")
+    print(f"Different employee: {success}, {msg}")
+    
+    # Get today's records
+    today = logger.get_today_records()
+    print(f"\nToday's records:\n{today}")
+    
+    # Generate summary
+    summary = logger.generate_daily_summary()
+    print(f"\nDaily summary: {summary}")
+    
+    print("\n✓ AttendanceLogger test complete!")

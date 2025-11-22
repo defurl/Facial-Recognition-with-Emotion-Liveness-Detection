@@ -1,0 +1,4 @@
+name,timestamp,confidence,emotion,liveness
+zilus,2025-11-22T01:17:22.210831,0.622,Neutral,Real
+zilus,2025-11-22T01:27:39.766679,0.716,Neutral,Real
+zilus,2025-11-22T01:34:55.330838,0.729,Neutral,Real

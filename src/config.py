@@ -50,6 +50,56 @@ GUI_WINDOW_WIDTH = 640
 GUI_WINDOW_HEIGHT = 480
 CAMERA_INDEX = 1  # default camera index; app will fallback to others if unavailable
 
+# ============= Registration Settings =============
+REGISTRATION_MODE_FULL = 6  # number of captures for full registration
+REGISTRATION_MODE_QUICK = 3  # number of captures for quick registration
+REGISTRATION_POSES_FULL = ["center", "left", "right", "up", "down", "center"]
+REGISTRATION_POSES_QUICK = ["center", "left", "right"]
+REGISTRATION_INSTRUCTIONS_FULL = [
+    "Face forward",
+    "Turn left ~30°",
+    "Turn right ~30°",
+    "Look up ~15°",
+    "Look down ~15°",
+    "Face forward again"
+]
+REGISTRATION_INSTRUCTIONS_QUICK = [
+    "Face forward",
+    "Turn left ~30°",
+    "Turn right ~30°"
+]
+
+# Quality thresholds for registration
+BLUR_THRESHOLD_STRICT = 100  # Laplacian variance threshold
+BLUR_THRESHOLD_RELAXED = 80
+LIGHTING_MIN_BRIGHT_STRICT = 30
+LIGHTING_MAX_BRIGHT_STRICT = 220
+LIGHTING_MIN_BRIGHT_RELAXED = 25
+LIGHTING_MAX_BRIGHT_RELAXED = 230
+LIGHTING_MIN_CONTRAST = 30
+
+# Pose tolerances
+YAW_TOLERANCE_STRICT = 5.0  # degrees
+YAW_TOLERANCE_RELAXED = 8.0
+PITCH_TOLERANCE_STRICT = 7.0  # degrees
+PITCH_TOLERANCE_RELAXED = 10.0
+
+# Adaptive threshold settings
+ADAPTIVE_THRESHOLD_ATTEMPTS = 2  # switch to relaxed after this many attempts
+FAILURE_TOOLTIP_THRESHOLD = 5  # show tooltip after this many failures
+
+# ============= Attendance Settings =============
+ATTENDANCE_COOLDOWN_MINUTES = 60  # minimum minutes between attendance marks
+ATTENDANCE_LOG_PATH = OUTPUT_DIR / "attendance_log.csv"
+
+# ============= Multi-Face Settings =============
+PRIMARY_FACE_AREA_WEIGHT = 0.6  # weight for face area in primary selection
+PRIMARY_FACE_CENTER_WEIGHT = 0.4  # weight for centeredness in primary selection
+
+# ============= Feature Flags =============
+USE_MULTI_EMBEDDING = True  # use multi-embedding matching for verification
+DEBUG_MODE = False  # enable debug logging and frame saving
+
 # ============= Image Normalization =============
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
