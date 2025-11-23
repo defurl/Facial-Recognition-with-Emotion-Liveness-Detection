@@ -57,16 +57,16 @@ REGISTRATION_POSES_FULL = ["center", "left", "right", "up", "down", "center"]
 REGISTRATION_POSES_QUICK = ["center", "left", "right"]
 REGISTRATION_INSTRUCTIONS_FULL = [
     "Face forward",
-    "Turn left ~30°",
-    "Turn right ~30°",
-    "Look up ~15°",
-    "Look down ~15°",
+    "Turn left",
+    "Turn right",
+    "Look up",
+    "Look down",
     "Face forward again"
 ]
 REGISTRATION_INSTRUCTIONS_QUICK = [
     "Face forward",
-    "Turn left ~30°",
-    "Turn right ~30°"
+    "Turn left",
+    "Turn right"
 ]
 
 # Quality thresholds for registration

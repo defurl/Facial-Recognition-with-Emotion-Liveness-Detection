@@ -38,6 +38,7 @@ from models import FaceEmbeddingCNN
 from data_loader import get_transforms
 from utils import detect_faces, crop_face_with_padding
 from emotion import analyze_emotion_and_liveness
+from attendance import AttendanceLogger
 
 # Global variables
 verification_model = None
@@ -156,6 +157,36 @@ def select_primary_face(faces, frame_width, frame_height):
         return -1 if not faces else 0
 
 
+def draw_rounded_rectangle(img, pt1, pt2, color, thickness=2, radius=15):
+    """Draw a rectangle with rounded corners for modern UI look"""
+    x1, y1 = pt1
+    x2, y2 = pt2
+    
+    if thickness < 0:  # Filled
+        # Draw filled rectangles and circles for rounded corners
+        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
+        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
+        cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
+        cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
+        cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
+        cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
+    else:  # Outline
+        # Draw lines with rounded corners
+        cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness)
+        cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness)
+        cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness)
+        cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness)
+        cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness)
+        cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness)
+        cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness)
+        cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness)
+
+
+def interpolate_color(color1, color2, factor):
+    """Smoothly interpolate between two colors for transitions"""
+    return tuple(int(c1 + (c2 - c1) * factor) for c1, c2 in zip(color1, color2))
+
+
 class AttendanceSystemGUI:
     """Modern GUI application for face recognition attendance system"""
     
@@ -164,7 +195,7 @@ class AttendanceSystemGUI:
         self.window.title("🎭 Face Recognition Attendance System")
         self.window.geometry("1200x800")
         self.window.minsize(1000, 700)
-        self.window.configure(bg='#f0f0f0')
+        self.window.configure(bg='#f8f9fa')
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Configure styles
@@ -177,11 +208,21 @@ class AttendanceSystemGUI:
         # Processing control
         self.frame_count = 0
         self.PROCESS_EVERY_N_FRAMES = PROCESS_EVERY_N_FRAMES
+        self.EMOTION_EVERY_N_FRAMES = 30  # Process emotion every 30 frames (~1 second) to reduce lag
         self.last_emotion = "Neutral"
         self.last_liveness = "Unknown"
         self.last_identity = "Not Registered"
         self.last_distance = float('inf')
+        self.last_confidence = 0.0  # Phase 7: Confidence percentage
+        self.matched_pose_index = -1  # Phase 7: Which pose matched
         self.multiple_faces_warning = False
+        
+        # Phase 8: Attendance logger
+        self.attendance_logger = AttendanceLogger(
+            csv_path=OUTPUT_DIR / 'attendance_log.csv',
+            cooldown_minutes=60
+        )
+        self.last_attendance_message = ""
         
         # Registration mode
         self.registration_mode = False
@@ -198,195 +239,305 @@ class AttendanceSystemGUI:
             'unique_faces_today': set()
         }
         
+        # Animation states for smooth transitions
+        self.verification_animation = {
+            'active': False,
+            'type': None,  # 'success' or 'failure'
+            'frame_count': 0,
+            'max_frames': 30  # ~1 second at 30fps
+        }
+        self.box_color_transition = {
+            'current_color': (128, 128, 128),
+            'target_color': (128, 128, 128),
+            'frame': 0,
+            'transition_frames': 10
+        }
+        
         self.setup_ui()
         
     def setup_styles(self):
-        """Setup modern TTK styles"""
+        """Setup modern TTK styles with sharp, clean fonts"""
         self.style = ttk.Style()
         self.style.theme_use('clam')
         
-        # Configure custom styles
-        self.style.configure('Title.TLabel', font=('Arial', 16, 'bold'), foreground='#2c3e50')
-        self.style.configure('Header.TLabel', font=('Arial', 12, 'bold'), foreground='#34495e')
-        self.style.configure('Status.TLabel', font=('Arial', 11), foreground='#27ae60')
-        self.style.configure('Error.TLabel', font=('Arial', 11), foreground='#e74c3c')
-        self.style.configure('Info.TLabel', font=('Arial', 10), foreground='#7f8c8d')
+        # Configure custom styles with sharp, modern fonts
+        self.style.configure('Title.TLabel', font=('Segoe UI Semibold', 20, 'bold'), foreground='#1a1a2e')
+        self.style.configure('Header.TLabel', font=('Segoe UI Semibold', 13, 'bold'), foreground='#16213e')
+        self.style.configure('Status.TLabel', font=('Segoe UI', 11), foreground='#0f3460')
+        self.style.configure('Error.TLabel', font=('Segoe UI Semibold', 11), foreground='#e94560')
+        self.style.configure('Info.TLabel', font=('Segoe UI', 9), foreground='#6c757d')
         
-        # Button styles
-        self.style.configure('Primary.TButton', font=('Arial', 10, 'bold'))
-        self.style.configure('Success.TButton', font=('Arial', 10), foreground='#27ae60')
-        self.style.configure('Warning.TButton', font=('Arial', 10), foreground='#f39c12')
-        self.style.configure('Danger.TButton', font=('Arial', 10), foreground='#e74c3c')
+        # Modern button styles with sharp fonts
+        self.style.configure('Primary.TButton', 
+                           font=('Segoe UI Semibold', 10, 'bold'),
+                           background='#4a90e2',
+                           foreground='white',
+                           borderwidth=0,
+                           relief='flat',
+                           padding=(20, 10))
+        self.style.map('Primary.TButton',
+                      background=[('active', '#3a7bd5'), ('pressed', '#2d5f9f')])
         
-        # Frame styles - use default TLabelFrame layout
-        self.style.configure('Card.TLabelFrame', 
-                           relief='solid', 
-                           borderwidth=1,
-                           background='#ffffff')
-        self.style.configure('Card.TLabelFrame.Label', 
-                           font=('Arial', 11, 'bold'), 
-                           foreground='#2c3e50')
+        self.style.configure('Success.TButton', 
+                           font=('Segoe UI Semibold', 10, 'bold'),
+                           background='#2ecc71',
+                           foreground='white',
+                           borderwidth=0,
+                           relief='flat',
+                           padding=(20, 10))
+        self.style.map('Success.TButton',
+                      background=[('active', '#27ae60'), ('pressed', '#1e8449')])
+        
+        self.style.configure('Warning.TButton', 
+                           font=('Segoe UI', 10),
+                           background='#f39c12',
+                           foreground='white',
+                           borderwidth=0,
+                           relief='flat',
+                           padding=(20, 10))
+        self.style.map('Warning.TButton',
+                      background=[('active', '#e67e22'), ('pressed', '#d35400')])
+        
+        self.style.configure('Danger.TButton', 
+                           font=('Segoe UI', 10),
+                           background='#e74c3c',
+                           foreground='white',
+                           borderwidth=0,
+                           relief='flat',
+                           padding=(20, 10))
+        self.style.map('Danger.TButton',
+                      background=[('active', '#c0392b'), ('pressed', '#a93226')])
+        
+        # Disabled button state - dark gray that stands out
+        self.style.map('TButton',
+                      background=[('disabled', '#95a5a6')],
+                      foreground=[('disabled', '#555555')])
+        self.style.map('Primary.TButton',
+                      background=[('disabled', '#7f8c8d')],
+                      foreground=[('disabled', '#34495e')])
+        self.style.map('Success.TButton',
+                      background=[('disabled', '#7f8c8d')],
+                      foreground=[('disabled', '#34495e')])
+        
+        # LabelFrame styles - simple configuration without custom layout
+        self.style.configure('TLabelframe', background='#ffffff', borderwidth=1)
+        self.style.configure('TLabelframe.Label', 
+                           font=('Segoe UI', 11, 'bold'), 
+                           foreground='#2c3e50',
+                           background='#f8f9fa')
     
     def setup_ui(self):
-        """Setup the modern user interface"""
+        """Setup the modern user interface with minimalist design"""
         # Main container with padding
-        main_container = tk.Frame(self.window, bg='#f0f0f0')
+        main_container = tk.Frame(self.window, bg='#f8f9fa')
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Title header
-        title_frame = tk.Frame(main_container, bg='#f0f0f0')
+        # Title header with gradient-like effect
+        title_frame = tk.Frame(main_container, bg='#f8f9fa')
         title_frame.pack(fill=tk.X, pady=(0, 20))
         
-        ttk.Label(title_frame, text="🎭 Face Recognition Attendance System", 
-                 style='Title.TLabel').pack(side=tk.LEFT)
+        title_label = ttk.Label(title_frame, text="🎭 Face Recognition System", 
+                               style='Title.TLabel')
+        title_label.pack(side=tk.LEFT)
         
-        # Status indicator
-        self.status_indicator = tk.Label(title_frame, text="●", font=('Arial', 20), 
-                                        fg='#e74c3c', bg='#f0f0f0')
+        # Status indicator with smooth animation
+        self.status_indicator = tk.Label(title_frame, text="●", font=('Segoe UI', 20), 
+                                        fg='#e94560', bg='#f8f9fa')
         self.status_indicator.pack(side=tk.RIGHT, padx=(10, 0))
         
         # Main content area
-        content_frame = tk.Frame(main_container, bg='#f0f0f0')
+        content_frame = tk.Frame(main_container, bg='#f8f9fa')
         content_frame.pack(fill=tk.BOTH, expand=True)
         
         # Left panel (video + controls)
-        left_panel = tk.Frame(content_frame, bg='#f0f0f0')
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        left_panel = tk.Frame(content_frame, bg='#f8f9fa')
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
         
-        # Video frame with modern styling
+        # Video frame with modern flat styling
         video_frame = ttk.LabelFrame(left_panel, text="📹 Live Camera Feed")
-        video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        video_frame.configure(relief='flat', borderwidth=1)
         
-        # Video container
-        video_container = tk.Frame(video_frame, bg='#2c3e50', relief='sunken', borderwidth=2)
-        video_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Video container with subtle shadow effect
+        video_container = tk.Frame(video_frame, bg='#1a1a2e', relief='flat', borderwidth=0,
+                                  highlightthickness=2, highlightbackground='#e0e0e0')
+        video_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        self.video_label = tk.Label(video_container, bg='#34495e', text="Camera Feed\nClick 'Start Camera' to begin", 
-                                   fg='white', font=('Arial', 14), justify=tk.CENTER)
+        self.video_label = tk.Label(video_container, bg='#16213e', 
+                                   text="Camera Feed\nClick 'Start Camera' to begin", 
+                                   fg='#ffffff', font=('Segoe UI', 14), justify=tk.CENTER)
         self.video_label.pack(fill=tk.BOTH, expand=True)
         
         # Store video display dimensions
         self.video_width = 640
         self.video_height = 480
         
-        # Controls frame
+        # Controls frame with card styling
         controls_frame = ttk.LabelFrame(left_panel, text="🎮 Camera Controls")
-        controls_frame.pack(fill=tk.X, pady=(0, 10))
+        controls_frame.pack(fill=tk.X, pady=(0, 15))
+        controls_frame.configure(relief='flat', borderwidth=1)
         
-        control_buttons_frame = tk.Frame(controls_frame)
-        control_buttons_frame.pack(fill=tk.X, padx=10, pady=10)
+        control_buttons_frame = tk.Frame(controls_frame, bg='white')
+        control_buttons_frame.pack(fill=tk.X, padx=15, pady=15)
         
         self.start_button = ttk.Button(control_buttons_frame, text="▶ Start Camera", 
                                       command=self.start_camera, style='Primary.TButton')
-        self.start_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.start_button.pack(side=tk.LEFT, padx=(0, 8))
         
         self.stop_button = ttk.Button(control_buttons_frame, text="⏹ Stop Camera", 
                                      command=self.stop_camera, state=tk.DISABLED, style='Warning.TButton')
-        self.stop_button.pack(side=tk.LEFT, padx=5)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 8))
         
-        self.register_button = ttk.Button(control_buttons_frame, text="👤 Register Employee", 
+        self.register_button = ttk.Button(control_buttons_frame, text="👤 Register New Face", 
                                          command=self.start_registration, state=tk.DISABLED, style='Success.TButton')
-        self.register_button.pack(side=tk.LEFT, padx=5)
+        self.register_button.pack(side=tk.LEFT)
         
-        # Status frame
+        # Status frame with modern card design
         status_frame = ttk.LabelFrame(left_panel, text="📊 System Status")
         status_frame.pack(fill=tk.X)
+        status_frame.configure(relief='flat', borderwidth=1)
         
-        status_container = tk.Frame(status_frame)
-        status_container.pack(fill=tk.X, padx=10, pady=10)
+        status_container = tk.Frame(status_frame, bg='white')
+        status_container.pack(fill=tk.X, padx=15, pady=15)
         
         self.status_text = tk.StringVar(value="🔴 System ready. Click 'Start Camera' to begin recognition.")
-        self.status_label = ttk.Label(status_container, textvariable=self.status_text, style='Status.TLabel')
+        self.status_label = ttk.Label(status_container, textvariable=self.status_text, 
+                                     style='Status.TLabel', background='white')
         self.status_label.pack(anchor=tk.W)
         
         # Right panel (employee management + detection info)
-        right_panel = tk.Frame(content_frame, bg='#f0f0f0', width=350)
+        right_panel = tk.Frame(content_frame, bg='#f8f9fa', width=360)
         right_panel.pack(side=tk.RIGHT, fill=tk.Y)
         right_panel.pack_propagate(False)
         
-        # Detection results
+        # Detection results with modern card
         detection_frame = ttk.LabelFrame(right_panel, text="🎯 Current Detection")
-        detection_frame.pack(fill=tk.X, pady=(0, 10))
+        detection_frame.pack(fill=tk.X, pady=(0, 15))
+        detection_frame.configure(relief='flat', borderwidth=1)
         
-        detection_container = tk.Frame(detection_frame)
+        detection_container = tk.Frame(detection_frame, bg='white')
         detection_container.pack(fill=tk.X, padx=15, pady=15)
         
-        # Identity display
-        identity_frame = tk.Frame(detection_container, bg='white', relief='raised', borderwidth=1)
-        identity_frame.pack(fill=tk.X, pady=(0, 10))
+        # Identity display with accent
+        identity_frame = tk.Frame(detection_container, bg='#4a90e2', relief='flat', borderwidth=0,
+                                 highlightthickness=0)
+        identity_frame.pack(fill=tk.X, pady=(0, 12))
         
         self.identity_label = tk.Label(identity_frame, text="👤 No face detected", 
-                                      font=('Arial', 14, 'bold'), fg='#2c3e50', bg='white',
-                                      padx=15, pady=10)
+                                      font=('Segoe UI', 13, 'bold'), fg='white', bg='#4a90e2',
+                                      padx=15, pady=12)
         self.identity_label.pack(fill=tk.X)
         
-        # Detection details
-        details_frame = tk.Frame(detection_container)
+        # Detection details with modern styling
+        details_frame = tk.Frame(detection_container, bg='white')
         details_frame.pack(fill=tk.X)
         
         # Emotion
-        emotion_frame = tk.Frame(details_frame)
-        emotion_frame.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(emotion_frame, text="😊 Emotion:", font=('Arial', 10, 'bold'), 
-                bg='#f0f0f0').pack(side=tk.LEFT)
+        emotion_frame = tk.Frame(details_frame, bg='white')
+        emotion_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(emotion_frame, text="😊 Emotion:", font=('Segoe UI', 10, 'bold'), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
         self.emotion_var = tk.StringVar(value="Neutral")
-        tk.Label(emotion_frame, textvariable=self.emotion_var, font=('Arial', 10), 
-                bg='#f0f0f0', fg='#27ae60').pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(emotion_frame, textvariable=self.emotion_var, font=('Segoe UI', 10), 
+                bg='white', fg='#2ecc71').pack(side=tk.LEFT, padx=(10, 0))
         
         # Liveness
-        liveness_frame = tk.Frame(details_frame)
-        liveness_frame.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(liveness_frame, text="🔍 Liveness:", font=('Arial', 10, 'bold'), 
-                bg='#f0f0f0').pack(side=tk.LEFT)
+        liveness_frame = tk.Frame(details_frame, bg='white')
+        liveness_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(liveness_frame, text="🔍 Liveness:", font=('Segoe UI', 10, 'bold'), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
         self.liveness_var = tk.StringVar(value="Unknown")
         self.liveness_label = tk.Label(liveness_frame, textvariable=self.liveness_var, 
-                                      font=('Arial', 10), bg='#f0f0f0', fg='#3498db')
+                                      font=('Segoe UI', 10), bg='white', fg='#4a90e2')
         self.liveness_label.pack(side=tk.LEFT, padx=(10, 0))
         
         # Distance
-        distance_frame = tk.Frame(details_frame)
-        distance_frame.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(distance_frame, text="📏 Distance:", font=('Arial', 10, 'bold'), 
-                bg='#f0f0f0').pack(side=tk.LEFT)
+        distance_frame = tk.Frame(details_frame, bg='white')
+        distance_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(distance_frame, text="📏 Distance:", font=('Segoe UI', 10, 'bold'), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
         self.distance_var = tk.StringVar(value="N/A")
-        tk.Label(distance_frame, textvariable=self.distance_var, font=('Arial', 10), 
-                bg='#f0f0f0', fg='#9b59b6').pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(distance_frame, textvariable=self.distance_var, font=('Segoe UI', 10), 
+                bg='white', fg='#9b59b6').pack(side=tk.LEFT, padx=(10, 0))
         
-        # Employee management
+        # Phase 7: Confidence
+        confidence_frame = tk.Frame(details_frame, bg='white')
+        confidence_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(confidence_frame, text="💯 Confidence:", font=('Segoe UI', 10, 'bold'), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
+        self.confidence_var = tk.StringVar(value="N/A")
+        self.confidence_label = tk.Label(confidence_frame, textvariable=self.confidence_var, 
+                                        font=('Segoe UI', 10, 'bold'), bg='white', fg='#2ecc71')
+        self.confidence_label.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Phase 7: Debug panel
+        debug_frame = ttk.LabelFrame(right_panel, text="🔍 Verification Debug")
+        debug_frame.pack(fill=tk.X, pady=(0, 15))
+        debug_frame.configure(relief='flat', borderwidth=1)
+        
+        debug_container = tk.Frame(debug_frame, bg='white')
+        debug_container.pack(fill=tk.X, padx=15, pady=15)
+        
+        # Threshold info
+        threshold_frame = tk.Frame(debug_container, bg='white')
+        threshold_frame.pack(fill=tk.X, pady=(0, 5))
+        tk.Label(threshold_frame, text="Threshold:", font=('Segoe UI', 9), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
+        self.threshold_display = tk.Label(threshold_frame, text=f"{OPTIMAL_THRESHOLD_GUI:.3f}", 
+                                         font=('Segoe UI', 9, 'bold'), bg='white', fg='#4a90e2')
+        self.threshold_display.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Matched pose
+        pose_frame = tk.Frame(debug_container, bg='white')
+        pose_frame.pack(fill=tk.X, pady=(0, 5))
+        tk.Label(pose_frame, text="Matched Pose:", font=('Segoe UI', 9), 
+                bg='white', fg='#6c757d').pack(side=tk.LEFT)
+        self.pose_var = tk.StringVar(value="N/A")
+        tk.Label(pose_frame, textvariable=self.pose_var, font=('Segoe UI', 9), 
+                bg='white', fg='#2ecc71').pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Confidence bar
+        tk.Label(debug_container, text="Confidence:", font=('Segoe UI', 9), 
+                bg='white', fg='#6c757d', anchor=tk.W).pack(fill=tk.X, pady=(5, 2))
+        
+        bar_frame = tk.Frame(debug_container, bg='#e0e0e0', height=20, relief='flat')
+        bar_frame.pack(fill=tk.X)
+        bar_frame.pack_propagate(False)
+        
+        self.confidence_bar = tk.Frame(bar_frame, bg='#2ecc71', height=20)
+        self.confidence_bar.place(relwidth=0.0, relheight=1.0)
+        
+        self.confidence_bar_text = tk.Label(bar_frame, text="0%", font=('Segoe UI', 8, 'bold'), 
+                                           bg='#e0e0e0', fg='#555')
+        self.confidence_bar_text.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        
+        # Employee management with card styling
         employee_frame = ttk.LabelFrame(right_panel, text="👥 Employee Management")
-        employee_frame.pack(fill=tk.X, pady=(0, 10))
+        employee_frame.pack(fill=tk.X, pady=(0, 15))
+        employee_frame.configure(relief='flat', borderwidth=1)
         
-        emp_container = tk.Frame(employee_frame)
+        emp_container = tk.Frame(employee_frame, bg='white')
         emp_container.pack(fill=tk.X, padx=15, pady=15)
         
-        ttk.Button(emp_container, text="👁 View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="✏ Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="🗑 Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="⚙ Adjust Threshold", command=self.adjust_threshold).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(emp_container, text="👁 View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(emp_container, text="📅 View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(emp_container, text="✏ Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(emp_container, text="🗑 Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(emp_container, text="⚙ Adjust Threshold", command=self.adjust_threshold).pack(fill=tk.X)
         
-        # Statistics
+        # Statistics with modern card
         stats_frame = ttk.LabelFrame(right_panel, text="📈 Session Statistics")
-        stats_frame.pack(fill=tk.X, pady=(0, 10))
+        stats_frame.pack(fill=tk.X, pady=(0, 15))
+        stats_frame.configure(relief='flat', borderwidth=1)
         
-        stats_container = tk.Frame(stats_frame)
+        stats_container = tk.Frame(stats_frame, bg='white')
         stats_container.pack(fill=tk.X, padx=15, pady=15)
         
         self.stats_text = tk.StringVar()
         self.update_stats_display()
-        ttk.Label(stats_container, textvariable=self.stats_text, style='Info.TLabel', justify=tk.LEFT).pack(anchor=tk.W)
-        
-        # Debug info
-        debug_frame = ttk.LabelFrame(right_panel, text="🔧 Debug Information")
-        debug_frame.pack(fill=tk.X)
-        
-        debug_container = tk.Frame(debug_frame)
-        debug_container.pack(fill=tk.X, padx=15, pady=15)
-        
-        self.debug_text = tk.StringVar()
-        self.update_debug_display()
-        debug_label = ttk.Label(debug_container, textvariable=self.debug_text, 
-                               font=('Courier', 9), style='Info.TLabel', justify=tk.LEFT)
-        debug_label.pack(anchor=tk.W)
+        ttk.Label(stats_container, textvariable=self.stats_text, style='Info.TLabel', 
+                 background='white', justify=tk.LEFT).pack(anchor=tk.W)
+    
         
         # Configure grid weights for responsive design
         self.window.grid_rowconfigure(0, weight=1)
@@ -406,15 +557,46 @@ Recognition Accuracy: {accuracy:.1f}%
 Employees in DB: {len(employee_db)}"""
         self.stats_text.set(stats_text)
     
+    def update_debug_panel(self):
+        """Update Phase 7 debug panel with verification details"""
+        threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+        self.threshold_display.config(text=f"{threshold:.3f}")
+        
+        # Update matched pose
+        if self.matched_pose_index >= 0:
+            pose_names = ["Center", "Left", "Right", "Up", "Down"]
+            pose_name = pose_names[self.matched_pose_index] if self.matched_pose_index < 5 else f"Pose {self.matched_pose_index + 1}"
+            self.pose_var.set(pose_name)
+        else:
+            self.pose_var.set("N/A")
+        
+        # Update confidence bar
+        if self.last_confidence > 0:
+            confidence_ratio = self.last_confidence / 100.0
+            self.confidence_bar.place(relwidth=confidence_ratio, relheight=1.0)
+            self.confidence_bar_text.config(text=f"{self.last_confidence:.0f}%")
+            
+            # Color-code confidence bar
+            if self.last_confidence >= 80:
+                self.confidence_bar.config(bg='#2ecc71')  # Green
+            elif self.last_confidence >= 60:
+                self.confidence_bar.config(bg='#f39c12')  # Yellow
+            else:
+                self.confidence_bar.config(bg='#e74c3c')  # Red
+        else:
+            self.confidence_bar.place(relwidth=0.0, relheight=1.0)
+            self.confidence_bar_text.config(text="0%")
+    
     def update_debug_display(self):
-        """Update debug information display"""
+        """Update debug information display (legacy stats)"""
         threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
         debug_text = f"""Recognition Threshold: {threshold:.3f}
 Process Every N Frames: {self.PROCESS_EVERY_N_FRAMES}
 Model: {"Loaded" if verification_model else "Not Loaded"}
 Camera Status: {"Active" if self.running else "Inactive"}
 Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
-        self.debug_text.set(debug_text)
+        if hasattr(self, 'debug_text'):
+            self.debug_text.set(debug_text)
     
     def _open_camera_with_fallback(self):
         preferred_indices = [CAMERA_INDEX, 0, 1, 2]
@@ -453,7 +635,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         # Update UI indicators
         self.status_text.set("🟢 Camera started. Face recognition active...")
-        self.status_indicator.config(fg='#27ae60')  # Green
+        self.status_indicator.config(fg='#2ecc71')  # Modern green
         
         self.video_thread = threading.Thread(target=self.capture_frames, daemon=True)
         self.video_thread.start()
@@ -471,9 +653,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         # Update UI indicators
         self.status_text.set("🔴 Camera stopped. Click 'Start Camera' to resume.")
-        self.status_indicator.config(fg='#e74c3c')  # Red
+        self.status_indicator.config(fg='#e94560')  # Modern red
         self.video_label.config(image='', text="Camera Feed\nStopped", 
-                               fg='white', font=('Arial', 14), justify=tk.CENTER)
+                               fg='white', font=('Segoe UI', 14), justify=tk.CENTER)
         
         # Reset detection displays
         self.identity_label.config(text="👤 No face detected", bg='white', fg='#2c3e50')
@@ -490,7 +672,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         # Create custom registration dialog
         dialog = tk.Toplevel(self.window)
         dialog.title("👤 Register New Employee")
-        dialog.geometry("400x250")
+        dialog.geometry("400x400")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
@@ -585,7 +767,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         dialog = tk.Toplevel(self.window)
         dialog.title("✓ Review Registration")
-        dialog.geometry("600x500")
+        dialog.geometry("600x600")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
@@ -682,28 +864,53 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                     # Don't process any more frames during completion
                     continue
                 
-                # Display current step in top-right corner with background
+                # Clean, centered registration overlay above camera feed
                 h, w = frame.shape[:2]
-                instruction_text = f"Step {current_step + 1}/{len(state['poses_required'])}: {state['instructions'][current_step]}"
-                name_text = f"Registering: {self.registration_name}"
+                instruction_text = state['instructions'][current_step]
                 
-                # Calculate text sizes
-                (name_w, name_h), _ = cv2.getTextSize(name_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-                (inst_w, inst_h), _ = cv2.getTextSize(instruction_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                # Use sharp, modern font (FONT_HERSHEY_DUPLEX for sharper text)
+                font = cv2.FONT_HERSHEY_DUPLEX
                 
-                # Draw semi-transparent background box (moved higher to avoid blocking face)
+                # Calculate text size for instruction
+                (inst_w, inst_h), _ = cv2.getTextSize(instruction_text, font, 0.9, 2)
+                
+                # Center-top position with more breathing room
+                card_w = min(w - 100, 500)
+                card_h = 80
+                x_offset = (w - card_w) // 2
+                y_offset = 20
+                
+                # Draw modern card with high contrast
                 overlay = frame.copy()
-                box_w = max(name_w, inst_w) + 30
-                box_h = name_h + inst_h + 30
-                y_offset = 50  # Start further down to avoid blocking top of frame
-                cv2.rectangle(overlay, (w - box_w - 10, y_offset), (w - 10, y_offset + box_h), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                draw_rounded_rectangle(overlay, (x_offset, y_offset), 
+                                     (x_offset + card_w, y_offset + card_h), 
+                                     (26, 26, 46), -1, radius=12)  # Dark background #1a1a2e
+                cv2.addWeighted(overlay, 0.95, frame, 0.05, 0, frame)
                 
-                # Draw text
-                cv2.putText(frame, name_text, 
-                           (w - box_w, y_offset + 20 + name_h), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                cv2.putText(frame, instruction_text, 
-                           (w - box_w, y_offset + 20 + name_h + inst_h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                # Circular progress indicator on left side
+                progress = current_step / len(state['poses_required'])
+                circle_x = x_offset + 50
+                circle_y = y_offset + card_h // 2
+                radius = 28
+                
+                # Progress circle background
+                cv2.circle(frame, (circle_x, circle_y), radius, (60, 60, 80), -1)
+                # Progress arc
+                angle = int(360 * progress)
+                cv2.ellipse(frame, (circle_x, circle_y), (radius - 3, radius - 3), 
+                           -90, 0, angle, (46, 204, 113), 4)  # #2ecc71 green
+                # Progress number with high contrast
+                progress_text = f"{current_step + 1}/{len(state['poses_required'])}"
+                (prog_w, prog_h), _ = cv2.getTextSize(progress_text, font, 0.6, 1)
+                cv2.putText(frame, progress_text, 
+                           (circle_x - prog_w//2, circle_y + prog_h//2), 
+                           font, 0.6, (255, 255, 255), 1)
+                
+                # Instruction text - centered with high contrast white (lighter weight)
+                text_x = x_offset + 100
+                text_y = y_offset + (card_h + inst_h) // 2
+                cv2.putText(frame, instruction_text, (text_x, text_y), 
+                           font, 0.85, (255, 255, 255), 1, cv2.LINE_AA)
                 
                 # Check every 15 frames (~0.5 seconds at 30fps) to reduce flickering
                 if self.frame_count - state['last_check_frame'] >= 15:
@@ -711,16 +918,16 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                     
                     faces = detect_faces(frame)
                     if len(faces) == 0:
-                        cv2.putText(frame, "No face detected", (10, 100), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.putText(frame, "No face detected", (10, h - 40), 
+                                   cv2.FONT_HERSHEY_DUPLEX, 0.65, (231, 76, 60), 1, cv2.LINE_AA)
                         state['hold_frames'] = 0
                     else:
                         x, y, w, h = faces[0]
                         cropped_face = crop_face_with_padding(frame, x, y, w, h)
                         
                         if cropped_face.size == 0 or cropped_face.shape[0] < 50:
-                            cv2.putText(frame, "Face too small", (10, 100), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                            cv2.putText(frame, "Face too small", (10, h - 40), 
+                                       cv2.FONT_HERSHEY_DUPLEX, 0.65, (231, 76, 60), 1, cv2.LINE_AA)
                             state['hold_frames'] = 0
                         else:
                             # Import quality check functions
@@ -735,12 +942,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 remaining = 12 - state['hold_frames']
                                 
                                 if remaining > 0:
-                                    cv2.putText(frame, f"✓ Hold steady... {remaining}", (10, 100), 
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                    cv2.putText(frame, f"Hold steady... {remaining}", (10, frame.shape[0] - 40),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
                                 else:
                                     # Capture this pose
-                                    cv2.putText(frame, "✓ Captured!", (10, 100), 
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                    cv2.putText(frame, "Captured!", (10, h - 40), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
                                     
                                     try:
                                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
@@ -765,17 +972,17 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             else:
                                 state['hold_frames'] = 0
                                 if not blur_ok:
-                                    cv2.putText(frame, "Image too blurry", (10, 100), 
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                                    cv2.putText(frame, "Image too blurry", (10, h - 40), 
+                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
                                 elif not lighting_ok:
-                                    cv2.putText(frame, "Poor lighting", (10, 100), 
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                                    cv2.putText(frame, "Poor lighting", (10, h - 40), 
+                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
                 else:
-                    # Show persistent hold counter between checks to reduce flickering
+                    # Show persistent hold counter at bottom (lighter weight)
                     if state.get('hold_frames', 0) > 0:
                         remaining = max(0, 12 - state['hold_frames'])
-                        cv2.putText(frame, f"✓ Hold steady... {remaining}", (10, 100), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.putText(frame, f"Hold steady... {remaining}", (10, h - 40), 
+                                   cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
             
             faces = detect_faces(frame)
             h, w = frame.shape[:2]
@@ -790,23 +997,33 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 is_primary = (face_idx == primary_face_idx)
                 box_color = (128, 128, 128) if not is_primary else (0, 255, 0)
 
-                # Only process primary face  
-                if is_primary and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0 and not self.registration_mode:
+                # Skip verification during registration mode - always show as unregistered
+                if self.registration_mode:
+                    if is_primary:
+                        self.last_identity = "Registering..."
+                        box_color = (255, 165, 0)  # Orange for registration
+                # Only process primary face for verification when NOT in registration mode
+                elif is_primary and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
                     cropped_face = crop_face_with_padding(frame, x, y, w, h)
 
                     if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
 
-                        # DeepFace-based emotion + liveness
-                        try:
-                            rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                            emo, is_live = analyze_emotion_and_liveness(rgb_face)
-                            self.last_emotion = emo
-                            self.last_liveness = 'Real' if is_live else 'Spoof'
-                        except Exception as e:
-                            print(f"DeepFace analyze error: {e}")
-                            is_live = True
-                            self.last_liveness = 'Real'
+                        # DeepFace-based emotion + liveness (run less frequently to avoid lag)
+                        is_live = True  # Default to Real
+                        if self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0:
+                            try:
+                                rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                                emo, is_live = analyze_emotion_and_liveness(rgb_face)
+                                self.last_emotion = emo
+                                self.last_liveness = 'Real' if is_live else 'Spoof'
+                            except Exception as e:
+                                print(f"DeepFace analyze error: {e}")
+                                is_live = True
+                                self.last_liveness = 'Real'
+                        else:
+                            # Reuse last liveness result between emotion checks
+                            is_live = (self.last_liveness == 'Real')
 
                         if not is_live:
                             self.last_identity = "Spoof Detected"
@@ -845,11 +1062,52 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 if min_distance < OPTIMAL_THRESHOLD_GUI:
                                     self.last_identity = best_match
                                     box_color = (0, 255, 0)
+                                    # Trigger success animation
+                                    if not self.verification_animation['active']:
+                                        self.verification_animation = {
+                                            'active': True,
+                                            'type': 'success',
+                                            'frame_count': 0,
+                                            'max_frames': 30
+                                        }
                                 else:
                                     self.last_identity = "Not Registered"
                                     box_color = (0, 0, 255)
+                                    self.last_confidence = 0.0  # Phase 7: Reset confidence
+                                    self.matched_pose_index = -1  # Phase 7: No match
+                                    # Trigger failure animation  
+                                    if not self.verification_animation['active']:
+                                        self.verification_animation = {
+                                            'active': True,
+                                            'type': 'failure',
+                                            'frame_count': 0,
+                                            'max_frames': 30
+                                        }
 
                                 self.last_distance = min_distance
+                                
+                                # Phase 7: Calculate confidence and track matched pose
+                                threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+                                self.last_confidence = max(0, min(100, (1 - min_distance / threshold) * 100))
+                                
+                                # Find which pose matched (for multi-embedding)
+                                if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
+                                    distances_with_idx = [(F.pairwise_distance(trial_embedding, emb).item(), idx) 
+                                                         for idx, emb in enumerate(saved_data)]
+                                    _, self.matched_pose_index = min(distances_with_idx, key=lambda x: x[0])
+                                else:
+                                    self.matched_pose_index = 0
+                                
+                                # Phase 8: Auto-mark attendance for recognized faces
+                                if self.last_identity != "Not Registered":
+                                    success, message = self.attendance_logger.mark_attendance(
+                                        self.last_identity, min_distance, self.last_emotion, self.last_liveness
+                                    )
+                                    self.last_attendance_message = message
+                                    if success:
+                                        print(f"✓ {message}")
+                                    else:
+                                        print(f"ℹ {message}")
                             except Exception as e:
                                 print(f"Verification error: {e}")
                                 self.last_identity = "Error"
@@ -862,13 +1120,48 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
 
                 # Display proper label for each face
                 if is_primary:
-                    display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                    if self.registration_mode:
+                        display_text = "Registering..."
+                    else:
+                        display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
                 else:
                     display_text = "Secondary Face"
                 
-                cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
-                cv2.putText(frame, display_text, (x, y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
+                # Smooth color transition for primary face
+                if is_primary and hasattr(self, 'box_color_transition'):
+                    trans = self.box_color_transition
+                    trans['target_color'] = box_color
+                    
+                    if trans['current_color'] != trans['target_color']:
+                        trans['frame'] += 1
+                        if trans['frame'] >= trans['transition_frames']:
+                            trans['current_color'] = trans['target_color']
+                            trans['frame'] = 0
+                        else:
+                            factor = trans['frame'] / trans['transition_frames']
+                            trans['current_color'] = interpolate_color(
+                                trans['current_color'], trans['target_color'], factor
+                            )
+                    box_color = trans['current_color']
+                
+                # Draw modern rounded rectangle with thicker line for recognized faces
+                thickness = 3 if (is_primary and self.last_identity not in ["Not Registered", "Error", "Spoof Detected", "Face too small", "Registering..."]) else 2
+                draw_rounded_rectangle(frame, (x, y), (x+w, y+h), box_color, thickness, radius=12)
+                
+                # Label with high contrast dark background for better readability
+                font = cv2.FONT_HERSHEY_DUPLEX  # Sharper font
+                (text_w, text_h), baseline = cv2.getTextSize(display_text, font, 0.6, 2)
+                label_y = max(y - text_h - 18, 10)
+                
+                # Dark semi-transparent background for maximum contrast
+                label_overlay = frame.copy()
+                draw_rounded_rectangle(label_overlay, (x - 2, label_y), (x + text_w + 24, label_y + text_h + 12), 
+                                     (20, 20, 30), -1, radius=8)  # Dark background
+                cv2.addWeighted(label_overlay, 0.85, frame, 0.15, 0, frame)
+                
+                # Bright white text with anti-aliasing (lighter weight)
+                cv2.putText(frame, display_text, (x + 10, label_y + text_h + 6), 
+                           font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
                 
                 # Update statistics (primary face only)
                 if is_primary:
@@ -879,11 +1172,14 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             # Display warning banner if multiple faces detected
             if self.multiple_faces_warning and len(faces) > 1:
-                warning_text = "⚠ Multiple faces detected - processing primary face only"
-                (tw, th), _ = cv2.getTextSize(warning_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-                cv2.rectangle(frame, (0, 0), (tw + 20, th + 15), (0, 165, 255), -1)
-                cv2.putText(frame, warning_text, (10, th + 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                warning_text = "⚠ Multiple faces - processing primary only"
+                font_warn = cv2.FONT_HERSHEY_DUPLEX
+                (tw, th), _ = cv2.getTextSize(warning_text, font_warn, 0.6, 1)
+                overlay = frame.copy()
+                draw_rounded_rectangle(overlay, (5, 5), (tw + 30, th + 22), (255, 165, 0), -1, radius=10)
+                cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
+                cv2.putText(frame, warning_text, (18, th + 14), 
+                           font_warn, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
 
             if not self.frame_queue.full():
                 try:
@@ -960,7 +1256,27 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         else:
             self.distance_var.set("N/A")
         
-        # Update status
+        # Phase 7: Update confidence display
+        if self.last_confidence > 0:
+            self.confidence_var.set(f"{self.last_confidence:.1f}%")
+            
+            # Color-code confidence
+            if self.last_confidence >= 80:
+                self.confidence_label.config(fg='#2ecc71')  # Green
+            elif self.last_confidence >= 60:
+                self.confidence_label.config(fg='#f39c12')  # Yellow
+            else:
+                self.confidence_label.config(fg='#e74c3c')  # Red
+        else:
+            self.confidence_var.set("N/A")
+            self.confidence_label.config(fg='#6c757d')
+        
+        # Update debug panel
+        self.update_debug_panel()
+        
+        # Update status (include attendance message if recent)
+        if self.last_attendance_message:
+            status_text = f"{status_text} | 📅 {self.last_attendance_message}"
         self.status_text.set(status_text)
     
     def adjust_threshold(self):
@@ -970,7 +1286,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         # Create custom dialog
         dialog = tk.Toplevel(self.window)
         dialog.title("⚙ Adjust Recognition Threshold")
-        dialog.geometry("400x300")
+        dialog.geometry("400x500")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
@@ -1033,14 +1349,15 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                     OPTIMAL_THRESHOLD_GUI = new_value
                     _save_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                     self.update_debug_display()
-                    messagebox.showinfo("Success", f"✅ Threshold updated to {OPTIMAL_THRESHOLD_GUI:.3f}")
+                    messagebox.showinfo("Success", f"✅ Threshold saved! New value: {OPTIMAL_THRESHOLD_GUI:.3f}")
                     dialog.destroy()
                 else:
                     messagebox.showerror("Invalid Value", "⚠ Please enter a value between 0.1 and 3.0")
             except ValueError:
                 messagebox.showerror("Invalid Input", "⚠ Please enter a valid number")
         
-        ttk.Button(button_frame, text="✓ Apply", command=apply_threshold).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="✓ Save", command=apply_threshold, 
+                  style='Success.TButton').pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="✗ Cancel", command=dialog.destroy).pack(side=tk.LEFT)
     
     def view_employees(self):
@@ -1087,14 +1404,14 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         ttk.Button(content, text="Close", command=dialog.destroy).pack(pady=(10, 0))
     
     def edit_employee(self):
-        """Edit employee with enhanced dialog"""
+        """Batch edit employees with checkboxes"""
         if len(employee_db) == 0:
-            messagebox.showinfo("✏ Edit Employee", "No employees registered yet.")
+            messagebox.showinfo("✏ Edit Employees", "No employees registered yet.")
             return
         
         dialog = tk.Toplevel(self.window)
-        dialog.title("✏ Edit Employee")
-        dialog.geometry("400x450")
+        dialog.title("✏ Edit Employees")
+        dialog.geometry("500x600")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
@@ -1104,71 +1421,211 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         
-        tk.Label(header, text="✏ Edit Employee Name", font=('Arial', 14, 'bold'), 
+        tk.Label(header, text="✏ Batch Edit Employee Names", font=('Segoe UI Semibold', 14, 'bold'), 
                 fg='white', bg='#f39c12').pack(pady=15)
         
         # Content
         content = tk.Frame(dialog, bg='#f0f0f0')
         content.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        tk.Label(content, text="Select employee to edit:", font=('Arial', 11, 'bold'), 
+        tk.Label(content, text="Select employees to rename:", font=('Segoe UI', 11, 'bold'), 
                 bg='#f0f0f0').pack(anchor=tk.W, pady=(0, 10))
         
-        # Employee list
-        list_frame = tk.Frame(content)
+        # Employee list with checkboxes
+        list_frame = tk.Frame(content, bg='white', relief='solid', borderwidth=1)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
-        scrollbar = tk.Scrollbar(list_frame)
+        canvas = tk.Canvas(list_frame, bg='white')
+        scrollbar = tk.Scrollbar(list_frame, orient='vertical', command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='white')
+        
+        scrollable_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, 
-                            font=('Arial', 10), height=12)
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=listbox.yview)
-        
+        # Checkboxes for each employee
+        check_vars = {}
         for name in sorted(employee_db.keys()):
-            listbox.insert(tk.END, name)
+            var = tk.BooleanVar()
+            check_vars[name] = var
+            cb = tk.Checkbutton(scrollable_frame, text=name, variable=var, 
+                               font=('Segoe UI', 10), bg='white', anchor='w')
+            cb.pack(fill=tk.X, padx=10, pady=2)
         
-        def confirm_edit():
-            selection = listbox.curselection()
-            if not selection:
-                messagebox.showwarning("⚠ No Selection", "Please select an employee to edit.")
+        # Selection buttons
+        select_frame = tk.Frame(content, bg='#f0f0f0')
+        select_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        def select_all():
+            for var in check_vars.values():
+                var.set(True)
+        
+        def deselect_all():
+            for var in check_vars.values():
+                var.set(False)
+        
+        tk.Button(select_frame, text="Select All", command=select_all, 
+                 font=('Segoe UI', 9), bg='#3498db', fg='white', relief='flat',
+                 padx=10, pady=5).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(select_frame, text="Deselect All", command=deselect_all,
+                 font=('Segoe UI', 9), bg='#95a5a6', fg='white', relief='flat',
+                 padx=10, pady=5).pack(side=tk.LEFT)
+        
+        def batch_rename():
+            selected = [name for name, var in check_vars.items() if var.get()]
+            if not selected:
+                messagebox.showwarning("⚠ No Selection", "Please select at least one employee.")
                 return
             
-            old_name = listbox.get(selection[0])
-            new_name = simpledialog.askstring("✏ Edit Employee", 
-                                            f"Enter new name for '{old_name}':", 
-                                            parent=dialog)
+            renamed_count = 0
+            for old_name in selected:
+                new_name = simpledialog.askstring("✏ Rename Employee", 
+                                                 f"Enter new name for '{old_name}':",
+                                                 parent=dialog)
+                if new_name and new_name.strip() and new_name != old_name:
+                    new_name = new_name.strip()
+                    if new_name in employee_db:
+                        messagebox.showerror("❌ Error", f"Employee '{new_name}' already exists! Skipping.")
+                        continue
+                    
+                    employee_db[new_name] = employee_db.pop(old_name)
+                    renamed_count += 1
             
-            if new_name and new_name.strip() and new_name != old_name:
-                new_name = new_name.strip()
-                if new_name in employee_db:
-                    messagebox.showerror("❌ Error", f"Employee '{new_name}' already exists!")
-                    return
-                
-                employee_db[new_name] = employee_db.pop(old_name)
+            if renamed_count > 0:
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
-                messagebox.showinfo("✅ Success", f"Renamed '{old_name}' to '{new_name}'")
+                messagebox.showinfo("✅ Success", f"Successfully renamed {renamed_count} employee(s)!")
                 self.update_stats_display()
                 self.update_debug_display()
-                dialog.destroy()
+            dialog.destroy()
         
         # Buttons
         button_frame = tk.Frame(content, bg='#f0f0f0')
         button_frame.pack(fill=tk.X)
         
-        ttk.Button(button_frame, text="✓ Edit Selected", command=confirm_edit).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="✓ Rename Selected", command=batch_rename,
+                  style='Success.TButton').pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="✗ Cancel", command=dialog.destroy).pack(side=tk.LEFT)
     
+    def view_attendance(self):
+        """Phase 8: View attendance records"""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("📅 Attendance Records")
+        dialog.geometry("800x600")
+        dialog.configure(bg='#f0f0f0')
+        dialog.transient(self.window)
+        
+        # Header
+        header = tk.Frame(dialog, bg='#4a90e2', height=60)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        tk.Label(header, text="📅 Attendance Records", font=('Segoe UI Semibold', 14, 'bold'), 
+                fg='white', bg='#4a90e2').pack(pady=15)
+        
+        # Content
+        content = tk.Frame(dialog, bg='#f0f0f0')
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Tab selection
+        tab_frame = tk.Frame(content, bg='#f0f0f0')
+        tab_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        current_tab = tk.StringVar(value="today")
+        
+        def show_today():
+            current_tab.set("today")
+            update_display()
+        
+        def show_all():
+            current_tab.set("all")
+            update_display()
+        
+        tk.Button(tab_frame, text="Today", command=show_today, 
+                 font=('Segoe UI', 10), bg='#4a90e2', fg='white', relief='flat',
+                 padx=20, pady=5).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(tab_frame, text="All Records", command=show_all,
+                 font=('Segoe UI', 10), bg='#2ecc71', fg='white', relief='flat',
+                 padx=20, pady=5).pack(side=tk.LEFT)
+        
+        # Records display
+        records_frame = tk.Frame(content, bg='white', relief='solid', borderwidth=1)
+        records_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Scrollbar
+        scrollbar = tk.Scrollbar(records_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Text widget for records
+        text_widget = tk.Text(records_frame, wrap=tk.NONE, font=('Consolas', 9),
+                             yscrollcommand=scrollbar.set)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        def update_display():
+            text_widget.delete('1.0', tk.END)
+            
+            if current_tab.get() == "today":
+                records = self.attendance_logger.get_today_attendance()
+                title = "Today's Attendance"
+            else:
+                records = self.attendance_logger.get_all_attendance()
+                title = "All Attendance Records"
+            
+            text_widget.insert('1.0', f"{title} ({len(records)} records)\n")
+            text_widget.insert(tk.END, "="*80 + "\n\n")
+            
+            if len(records) == 0:
+                text_widget.insert(tk.END, "No attendance records found.\n")
+            else:
+                # Header
+                text_widget.insert(tk.END, f"{'Timestamp':<20} {'Name':<20} {'Distance':<10} {'Emotion':<12} {'Liveness':<10}\n")
+                text_widget.insert(tk.END, "-"*80 + "\n")
+                
+                # Records (already sorted newest first from get_all_attendance)
+                for idx, record in records.iterrows():
+                    timestamp_str = str(record.get('timestamp', 'N/A'))[:19]  # Remove microseconds
+                    name = str(record.get('employee_name', 'Unknown'))[:20]
+                    distance = str(record.get('confidence_distance', 'N/A'))[:10]
+                    emotion = str(record.get('emotion', 'N/A'))[:12]
+                    liveness = str(record.get('liveness_status', 'N/A'))[:10]
+                    
+                    text_widget.insert(tk.END, f"{timestamp_str:<20} {name:<20} {distance:<10} {emotion:<12} {liveness:<10}\n")
+            
+            text_widget.config(state=tk.DISABLED)
+        
+        update_display()
+        
+        # Summary
+        summary_frame = tk.Frame(content, bg='#e8f5e8', relief='solid', borderwidth=1)
+        summary_frame.pack(fill=tk.X)
+        
+        summary = self.attendance_logger.get_attendance_summary(days=7)
+        summary_text = "Last 7 Days Summary: "
+        if summary:
+            summary_text += ", ".join([f"{name}: {count}" for name, count in summary.items()])
+        else:
+            summary_text += "No records"
+        
+        tk.Label(summary_frame, text=summary_text, font=('Segoe UI', 9), 
+                bg='#e8f5e8', fg='#27ae60').pack(padx=10, pady=8)
+        
+        # Close button
+        tk.Button(content, text="Close", command=dialog.destroy,
+                 font=('Segoe UI', 10), bg='#95a5a6', fg='white', relief='flat',
+                 padx=20, pady=5).pack()
+    
     def delete_employee(self):
-        """Delete employee with enhanced dialog"""
+        """Batch delete employees with checkboxes"""
         if len(employee_db) == 0:
             messagebox.showinfo("🗑 Delete Employee", "No employees registered yet.")
             return
         
         dialog = tk.Toplevel(self.window)
         dialog.title("🗑 Delete Employee")
-        dialog.geometry("400x450")
+        dialog.geometry("400x600")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
@@ -1192,12 +1649,80 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         content = tk.Frame(dialog, bg='#f0f0f0')
         content.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
-        tk.Label(content, text="Select employee to delete:", font=('Arial', 11, 'bold'), 
+        tk.Label(content, text="Select employees to delete:", font=('Segoe UI', 11, 'bold'), 
                 fg='#e74c3c', bg='#f0f0f0').pack(anchor=tk.W, pady=(0, 10))
         
-        # Employee list
-        list_frame = tk.Frame(content)
+        # Employee list with checkboxes
+        list_frame = tk.Frame(content, bg='white', relief='solid', borderwidth=1)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        canvas = tk.Canvas(list_frame, bg='white')
+        scrollbar = tk.Scrollbar(list_frame, orient='vertical', command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='white')
+        
+        scrollable_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=scrollable_frame, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Checkboxes for each employee
+        check_vars = {}
+        for name in sorted(employee_db.keys()):
+            var = tk.BooleanVar()
+            check_vars[name] = var
+            cb = tk.Checkbutton(scrollable_frame, text=name, variable=var, 
+                               font=('Segoe UI', 10), bg='white', anchor='w')
+            cb.pack(fill=tk.X, padx=10, pady=2)
+        
+        # Selection buttons
+        select_frame = tk.Frame(content, bg='#f0f0f0')
+        select_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        def select_all():
+            for var in check_vars.values():
+                var.set(True)
+        
+        def deselect_all():
+            for var in check_vars.values():
+                var.set(False)
+        
+        tk.Button(select_frame, text="Select All", command=select_all, 
+                 font=('Segoe UI', 9), bg='#3498db', fg='white', relief='flat',
+                 padx=10, pady=5).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(select_frame, text="Deselect All", command=deselect_all,
+                 font=('Segoe UI', 9), bg='#95a5a6', fg='white', relief='flat',
+                 padx=10, pady=5).pack(side=tk.LEFT)
+        
+        def batch_delete():
+            selected = [name for name, var in check_vars.items() if var.get()]
+            if not selected:
+                messagebox.showwarning("⚠ No Selection", "Please select at least one employee.")
+                return
+            
+            confirm = messagebox.askyesno("⚠ Confirm Deletion", 
+                                         f"Are you sure you want to delete {len(selected)} employee(s)?\\n\\n" +
+                                         "\\n".join(f"• {name}" for name in selected[:5]) +
+                                         (f"\\n... and {len(selected) - 5} more" if len(selected) > 5 else ""),
+                                         icon='warning')
+            if confirm:
+                for name in selected:
+                    del employee_db[name]
+                
+                torch.save(employee_db, EMPLOYEE_DB_PATH)
+                messagebox.showinfo("✅ Success", f"Successfully deleted {len(selected)} employee(s)!")
+                self.update_stats_display()
+                self.update_debug_display()
+                dialog.destroy()
+        
+        # Buttons
+        button_frame = tk.Frame(content, bg='#f0f0f0')
+        button_frame.pack(fill=tk.X)
+        
+        ttk.Button(button_frame, text="🗑 Delete Selected", command=batch_delete,
+                  style='Danger.TButton').pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="✗ Cancel", command=dialog.destroy).pack(side=tk.LEFT)
         
         scrollbar = tk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1233,10 +1758,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         # Buttons
         button_frame = tk.Frame(content, bg='#f0f0f0')
         button_frame.pack(fill=tk.X)
-        
-        delete_btn = ttk.Button(button_frame, text="🗑 Delete Selected", command=confirm_delete)
-        delete_btn.pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(button_frame, text="✗ Cancel", command=dialog.destroy).pack(side=tk.LEFT)
     
     def on_closing(self):
         """Handle window closing"""

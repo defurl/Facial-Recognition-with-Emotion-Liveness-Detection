@@ -248,6 +248,116 @@ class AttendanceLogger:
         except Exception as e:
             print(f"Error getting employee attendance: {e}")
             return pd.DataFrame()
+    
+    def get_today_attendance(self):
+        """
+        Get all attendance records for today (alias for get_today_records).
+        
+        Returns:
+            pandas.DataFrame: Today's attendance records
+        """
+        return self.get_today_records()
+    
+    def get_all_attendance(self):
+        """
+        Get all attendance records from the CSV file.
+        
+        Returns:
+            pandas.DataFrame: All attendance records
+        """
+        try:
+            if not self.csv_path.exists():
+                return pd.DataFrame(columns=['timestamp', 'employee_name', 'confidence_distance',
+                                            'emotion', 'liveness_status'])
+            
+            # Read entire CSV
+            df = pd.read_csv(self.csv_path)
+            
+            if df.empty:
+                return df
+            
+            # Parse timestamps
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Sort by timestamp descending (newest first)
+            df = df.sort_values('timestamp', ascending=False)
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error reading all records: {e}")
+            return pd.DataFrame()
+    
+    def get_attendance_summary(self, days=7):
+        """
+        Get attendance summary for the last N days.
+        
+        Args:
+            days: Number of days to include in summary
+        
+        Returns:
+            dict: Summary statistics for the period
+        """
+        try:
+            if not self.csv_path.exists():
+                return {
+                    'total_marks': 0,
+                    'unique_employees': 0,
+                    'avg_confidence': 0.0,
+                    'days_covered': 0
+                }
+            
+            # Read CSV
+            df = pd.read_csv(self.csv_path)
+            
+            if df.empty:
+                return {
+                    'total_marks': 0,
+                    'unique_employees': 0,
+                    'avg_confidence': 0.0,
+                    'days_covered': 0
+                }
+            
+            # Parse timestamps and filter by days
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            cutoff_date = datetime.now() - timedelta(days=days)
+            recent_df = df[df['timestamp'] >= cutoff_date]
+            
+            if recent_df.empty:
+                return {
+                    'total_marks': 0,
+                    'unique_employees': 0,
+                    'avg_confidence': 0.0,
+                    'days_covered': 0
+                }
+            
+            # Calculate statistics
+            total_marks = len(recent_df)
+            unique_employees = recent_df['employee_name'].nunique()
+            
+            # Calculate days covered
+            days_covered = (recent_df['timestamp'].max() - recent_df['timestamp'].min()).days + 1
+            
+            # Average confidence (1 - distance / threshold)
+            distances = pd.to_numeric(recent_df['confidence_distance'], errors='coerce')
+            avg_distance = distances.mean() if not distances.isna().all() else 0.0
+            avg_confidence = max(0.0, min(1.0, 1 - (avg_distance / 0.8))) * 100
+            
+            return {
+                'total_marks': int(total_marks),
+                'unique_employees': int(unique_employees),
+                'avg_confidence': float(avg_confidence),
+                'days_covered': int(days_covered)
+            }
+            
+        except Exception as e:
+            print(f"Error generating attendance summary: {e}")
+            return {
+                'total_marks': 0,
+                'unique_employees': 0,
+                'avg_confidence': 0.0,
+                'days_covered': 0
+            }
 
 
 if __name__ == "__main__":
