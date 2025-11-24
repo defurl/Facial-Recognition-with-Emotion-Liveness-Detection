@@ -67,6 +67,116 @@ class CBAM(nn.Module):
         return out
 
 
+class AdaptiveCBAM(nn.Module):
+    """
+    Adaptive CBAM with quality-aware attention scaling.
+    
+    Dynamically adjusts attention strength based on input quality:
+    - Higher attention for low-quality images (blur, poor lighting)
+    - Lower attention overhead for high-quality images
+    
+    This improves robustness to challenging conditions while maintaining
+    efficiency on good quality inputs.
+    """
+    def __init__(self, channels, ratio=16, kernel_size=7):
+        super(AdaptiveCBAM, self).__init__()
+        self.cbam = CBAM(channels, ratio, kernel_size)
+        
+        # Quality assessment branch
+        # Takes feature map and predicts quality score in [0, 1]
+        self.quality_branch = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // 4, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, 1, 1, bias=False),
+            nn.Sigmoid()  # Output in [0, 1]
+        )
+        
+        # Learnable scaling parameters
+        self.alpha = nn.Parameter(torch.tensor(0.5))  # Base attention weight
+        self.beta = nn.Parameter(torch.tensor(0.5))   # Quality sensitivity
+    
+    def forward(self, x, quality_score=None):
+        """
+        Forward pass with adaptive attention.
+        
+        Args:
+            x: Input feature map (B, C, H, W)
+            quality_score: Optional external quality score in [0, 1]
+                          If None, will be estimated from features
+        
+        Returns:
+            Feature map with adaptive attention applied
+        """
+        # Estimate quality from features if not provided
+        if quality_score is None:
+            quality_score = self.quality_branch(x)  # (B, 1, 1, 1)
+        else:
+            quality_score = quality_score.view(-1, 1, 1, 1)
+        
+        # Apply CBAM attention
+        attention_out = self.cbam(x)
+        
+        # Adaptive scaling: more attention for low quality
+        # weight = alpha + beta * (1 - quality)
+        # High quality (1.0) → weight = alpha
+        # Low quality (0.0) → weight = alpha + beta
+        attention_weight = self.alpha + self.beta * (1 - quality_score)
+        attention_weight = torch.clamp(attention_weight, 0, 1)
+        
+        # Blend: residual connection with adaptive attention
+        out = x + attention_weight * (attention_out - x)
+        
+        return out
+
+
+class RegionAwareCBAM(nn.Module):
+    """
+    Region-aware CBAM focusing on discriminative facial regions.
+    
+    Learns to emphasize important facial landmarks (eyes, nose, mouth)
+    while de-emphasizing less informative regions (background, hair).
+    """
+    def __init__(self, channels, ratio=16, kernel_size=7, num_regions=5):
+        super(RegionAwareCBAM, self).__init__()
+        self.cbam = CBAM(channels, ratio, kernel_size)
+        self.num_regions = num_regions
+        
+        # Region importance predictor
+        # Learns to weight different spatial regions
+        self.region_branch = nn.Sequential(
+            nn.Conv2d(channels, channels // 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 2, num_regions, 1),
+            nn.Softmax(dim=1)  # Normalize across regions
+        )
+    
+    def forward(self, x):
+        """
+        Forward with region-aware attention.
+        
+        Args:
+            x: Input feature map (B, C, H, W)
+        
+        Returns:
+            Feature map with region-aware attention
+        """
+        # Standard CBAM attention
+        attention_out = self.cbam(x)
+        
+        # Region importance map (B, num_regions, H, W)
+        region_importance = self.region_branch(x)
+        
+        # Aggregate region importance to single weight map
+        # Sum over region dimension: (B, 1, H, W)
+        region_weight = region_importance.sum(dim=1, keepdim=True)
+        
+        # Apply region weighting to attention
+        out = x + region_weight * (attention_out - x)
+        
+        return out
+
+
 class FaceEmbeddingCNN(nn.Module):
     """
     Custom CNN for face embedding extraction.

@@ -100,6 +100,22 @@ PRIMARY_FACE_CENTER_WEIGHT = 0.4  # weight for centeredness in primary selection
 USE_MULTI_EMBEDDING = True  # use multi-embedding matching for verification
 DEBUG_MODE = False  # enable debug logging and frame saving
 
+# ============= Explainability Settings (NEW for Hackathon) =============
+ENABLE_EXPLAINABILITY = True  # Enable xAI features
+SHOW_ATTENTION_MAPS = True  # Show CBAM attention heatmaps
+SHOW_KNN_NEIGHBORS = True  # Show k-nearest neighbors
+NUM_NEIGHBORS_DISPLAY = 5  # Number of neighbors to display
+KNN_CONFIDENCE_THRESHOLD = 0.6  # Minimum kNN confidence for acceptance
+USE_ADAPTIVE_CBAM = False  # Use adaptive CBAM (slower but more robust)
+USE_REGION_CBAM = False  # Use region-aware CBAM
+
+# ============= Dashboard Settings (NEW for Hackathon) =============
+ENABLE_TSNE_DASHBOARD = True  # Enable t-SNE visualization dashboard
+TSNE_UPDATE_INTERVAL = 2000  # Update dashboard every N ms
+TSNE_PERPLEXITY = 30  # t-SNE perplexity parameter
+TRACK_EMBEDDING_DRIFT = True  # Track embedding changes over time
+DRIFT_WARNING_THRESHOLD = 0.3  # Cosine distance threshold for drift warning
+
 # ============= Image Normalization =============
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
