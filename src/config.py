@@ -41,7 +41,7 @@ RANDOM_SEED = 42
 
 # ============= Verification Settings =============
 OPTIMAL_THRESHOLD = 1.15  # for notebook evaluation
-OPTIMAL_THRESHOLD_GUI = 0.8  # for GUI (stricter)
+OPTIMAL_THRESHOLD_GUI = 1.0  # for GUI (more lenient for demos)
 
 # ============= GUI Settings =============
 PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames

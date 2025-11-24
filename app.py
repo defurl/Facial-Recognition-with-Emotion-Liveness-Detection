@@ -19,6 +19,11 @@ import os
 # set before importing libraries that load OpenMP (e.g., torch, cv2)
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+# Suppress TensorFlow GPU warnings and disable GPU usage
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress TF warnings
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")  # Disable GPU for TensorFlow
+
 import time
 import queue
 import threading
@@ -223,6 +228,7 @@ class AttendanceSystemGUI:
             cooldown_minutes=60
         )
         self.last_attendance_message = ""
+        self.attendance_attempt_cache = {}  # Track last attempt time per person to prevent repeated I/O
         
         # Registration mode
         self.registration_mode = False
@@ -934,12 +940,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             from utils import check_image_blur, check_image_lighting
                             
                             # Quick quality checks
-                            blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=80)
+                            blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=40)
                             brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
                             
                             if blur_ok and lighting_ok:
                                 state['hold_frames'] += 1
-                                remaining = 12 - state['hold_frames']
+                                remaining = 5 - state['hold_frames']
                                 
                                 if remaining > 0:
                                     cv2.putText(frame, f"Hold steady... {remaining}", (10, frame.shape[0] - 40),
@@ -980,7 +986,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 else:
                     # Show persistent hold counter at bottom (lighter weight)
                     if state.get('hold_frames', 0) > 0:
-                        remaining = max(0, 12 - state['hold_frames'])
+                        remaining = max(0, 5 - state['hold_frames'])
                         cv2.putText(frame, f"Hold steady... {remaining}", (10, h - 40), 
                                    cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
             
@@ -1100,14 +1106,29 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 
                                 # Phase 8: Auto-mark attendance for recognized faces
                                 if self.last_identity != "Not Registered":
-                                    success, message = self.attendance_logger.mark_attendance(
-                                        self.last_identity, min_distance, self.last_emotion, self.last_liveness
-                                    )
-                                    self.last_attendance_message = message
-                                    if success:
-                                        print(f"✓ {message}")
-                                    else:
-                                        print(f"ℹ {message}")
+                                    # Only attempt once per cooldown period to avoid repeated I/O
+                                    current_time = time.time()
+                                    last_attempt = self.attendance_attempt_cache.get(self.last_identity, 0)
+                                    
+                                    # Attempt marking only if it's been more than 5 seconds since last attempt
+                                    if current_time - last_attempt > 5:
+                                        self.attendance_attempt_cache[self.last_identity] = current_time
+                                        
+                                        # Run attendance marking in background thread to avoid blocking GUI
+                                        def mark_async():
+                                            try:
+                                                success, message = self.attendance_logger.mark_attendance(
+                                                    self.last_identity, min_distance, self.last_emotion, self.last_liveness
+                                                )
+                                                self.last_attendance_message = message
+                                                if success:
+                                                    print(f"✓ {message}")
+                                                else:
+                                                    print(f"ℹ {message}")
+                                            except Exception as e:
+                                                print(f"Attendance marking error: {e}")
+                                        
+                                        threading.Thread(target=mark_async, daemon=True).start()
                             except Exception as e:
                                 print(f"Verification error: {e}")
                                 self.last_identity = "Error"

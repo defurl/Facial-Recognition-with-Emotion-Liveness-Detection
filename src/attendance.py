@@ -44,8 +44,8 @@ class AttendanceLogger:
         try:
             with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['timestamp', 'employee_name', 'confidence_distance', 
-                                'emotion', 'liveness_status'])
+                writer.writerow(['name', 'timestamp', 'confidence', 
+                                'emotion', 'liveness'])
             print(f"Created attendance log: {self.csv_path}")
         except Exception as e:
             print(f"Error creating attendance CSV: {e}")
@@ -123,12 +123,12 @@ class AttendanceLogger:
                 try:
                     timestamp = datetime.now()
                     
-                    # Append to CSV
+                    # Append to CSV (matching column order: name, timestamp, confidence, emotion, liveness)
                     with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
                         writer.writerow([
-                            timestamp.isoformat(),
                             employee_name,
+                            timestamp.isoformat(),
                             f"{distance:.4f}",
                             emotion,
                             liveness
@@ -333,15 +333,19 @@ class AttendanceLogger:
             
             # Calculate statistics
             total_marks = len(recent_df)
-            unique_employees = recent_df['employee_name'].nunique()
+            # Handle both 'name' and 'employee_name' column names for backward compatibility
+            name_col = 'name' if 'name' in recent_df.columns else 'employee_name'
+            unique_employees = recent_df[name_col].nunique()
             
             # Calculate days covered
             days_covered = (recent_df['timestamp'].max() - recent_df['timestamp'].min()).days + 1
             
             # Average confidence (1 - distance / threshold)
-            distances = pd.to_numeric(recent_df['confidence_distance'], errors='coerce')
+            # Handle both 'confidence' and 'confidence_distance' column names
+            conf_col = 'confidence' if 'confidence' in recent_df.columns else 'confidence_distance'
+            distances = pd.to_numeric(recent_df[conf_col], errors='coerce')
             avg_distance = distances.mean() if not distances.isna().all() else 0.0
-            avg_confidence = max(0.0, min(1.0, 1 - (avg_distance / 0.8))) * 100
+            avg_confidence = max(0.0, min(1.0, 1 - (avg_distance / 1.0))) * 100
             
             return {
                 'total_marks': int(total_marks),
