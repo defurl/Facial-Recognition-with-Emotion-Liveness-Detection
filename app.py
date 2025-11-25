@@ -209,12 +209,28 @@ class AttendanceSystemGUI:
     def __init__(self):
         self.window = tk.Tk()
         self.window.title("Face Recognition Attendance System - xAI Enhanced")
-        
-        # Fullscreen mode for maximum visibility
-        self.window.state('zoomed')  # Maximized window on Windows
-        # For cross-platform fullscreen:
-        # self.window.attributes('-fullscreen', True)
-        
+
+        # Fullscreen / maximize: handle cross-platform safely
+        try:
+            import platform
+            if platform.system() == 'Windows':
+                # Maximized window on Windows
+                try:
+                    self.window.state('zoomed')
+                except Exception:
+                    pass
+            else:
+                # On many Linux window managers the '-zoomed' attribute works.
+                # Try it, but don't raise if unsupported (avoids TclError).
+                try:
+                    self.window.attributes('-zoomed', True)
+                except Exception:
+                    # Fallback: don't force maximize on unknown platforms
+                    pass
+        except Exception:
+            # Be conservative: if platform detection fails, skip maximizing
+            pass
+
         self.window.minsize(1400, 900)
         self.window.configure(bg='#0d1117')  # Dark theme background
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
