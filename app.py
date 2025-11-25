@@ -284,6 +284,13 @@ class AttendanceSystemGUI:
         # Thread-safe queue for frames - optimized queue size
         self.frame_queue = queue.Queue(maxsize=1)  # Smaller queue to reduce lag
         
+        # Camera lock to prevent race conditions
+        self.camera_lock = threading.Lock()
+        
+        # Emotion analysis failure tracking for graceful degradation
+        self.emotion_failure_count = 0
+        self.emotion_analysis_enabled = True
+        
         # Recognition statistics
         self.recognition_stats = {
             'total_detections': 0,
@@ -456,7 +463,7 @@ class AttendanceSystemGUI:
         video_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.video_label = tk.Label(video_container, bg='#0d0d0d', 
-                                   text="Camera Feed\\nClick 'Start Camera' to begin", 
+                                   text="Camera Feed\nClick 'Start Camera' to begin", 
                                    fg='#8b949e', font=('Arial', 14), justify=tk.CENTER)
         self.video_label.pack(fill=tk.BOTH, expand=True)
         
@@ -555,43 +562,8 @@ class AttendanceSystemGUI:
         # Confidence
         confidence_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
         confidence_container.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
-        tk.Label(confidence_container, text="Confidence", font=('Arial', 8, 'bold'), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
         self.confidence_var = tk.StringVar(value="N/A")
-        self.confidence_label = tk.Label(confidence_container, textvariable=self.confidence_var, 
-                                        font=('Arial', 11, 'bold'), bg='#21262d', fg='#3fb950')
-        self.confidence_label.pack(pady=(0, 5))
-        
-        # Confidence gauge (prominent visual display)
-        gauge_frame = ttk.LabelFrame(middle_panel, text="MODEL CONFIDENCE")
-        gauge_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        gauge_container = tk.Frame(gauge_frame, bg='#161b22')
-        gauge_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Circular progress-style confidence display
-        tk.Label(gauge_container, text="Current Prediction", font=('Arial', 9, 'bold'), 
-                bg='#161b22', fg='#8b949e').pack()
-        
-        # Large confidence percentage
-        self.confidence_gauge = tk.Label(gauge_container, text="0%", 
-                                        font=('Arial', 36, 'bold'), 
-                                        fg='#3fb950', bg='#161b22')
-        self.confidence_gauge.pack(pady=10)
-        
-        # Confidence bar
-        bar_container = tk.Frame(gauge_container, bg='#21262d', height=25, relief='solid', borderwidth=1)
-        bar_container.pack(fill=tk.X, pady=(0, 5))
-        bar_container.pack_propagate(False)
-        
-        self.confidence_bar = tk.Frame(bar_container, bg='#3fb950', height=23)
-        self.confidence_bar.place(relwidth=0.0, relheight=1.0)
-        
-        # Threshold indicator
-        threshold_label = tk.Label(gauge_container, text=f"Threshold: {OPTIMAL_THRESHOLD_GUI:.3f}", 
-                                  font=('Arial', 9), bg='#161b22', fg='#8b949e')
-        threshold_label.pack()
-        
+
         # xAI Explainability Controls
         xai_frame = ttk.LabelFrame(middle_panel, text="EXPLAINABILITY (xAI)")
         xai_frame.pack(fill=tk.X, pady=(0, 10))
@@ -728,26 +700,6 @@ class AttendanceSystemGUI:
         else:
             self.pose_var.set("N/A")
         
-        # Update large confidence gauge
-        if self.last_confidence > 0:
-            confidence_ratio = self.last_confidence / 100.0
-            self.confidence_bar.place(relwidth=confidence_ratio, relheight=1.0)
-            self.confidence_gauge.config(text=f"{self.last_confidence:.0f}%")
-            
-            # Color-code based on confidence level
-            if self.last_confidence >= 80:
-                color = '#3fb950'  # Green
-            elif self.last_confidence >= 60:
-                color = '#d29922'  # Yellow
-            else:
-                color = '#f85149'  # Red
-            
-            self.confidence_bar.config(bg=color)
-            self.confidence_gauge.config(fg=color)
-        else:
-            self.confidence_bar.place(relwidth=0.0, relheight=1.0)
-            self.confidence_gauge.config(text="0%", fg='#8b949e')
-    
     def update_debug_display(self):
         """Update debug information display (legacy stats)"""
         threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
@@ -784,7 +736,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 try:
                     ret, test_frame = cap.read()
                     if ret and test_frame is not None and test_frame.size > 0:
-                        print(f"✓ Successfully opened camera {idx}")
+                        print(f"[OK] Successfully opened camera {idx}")
                         return cap
                 except Exception as read_err:
                     print(f"  Frame read error on camera {idx}: {read_err}")
@@ -803,7 +755,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         pass
                 continue
         
-        print("✗ Failed to open any camera")
+        print("[ERROR] Failed to open any camera")
         return None
 
     def start_camera(self):
@@ -896,7 +848,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         # Update UI indicators
         self.status_text.set("● Camera stopped. Click 'Start' to resume.")
         self.status_indicator.config(fg='#f85149')  # Red
-        self.video_label.config(image='', text="Camera Feed\\nStopped", 
+        self.video_label.config(image='', text="Camera Feed\nStopped", 
                                fg='#8b949e', font=('Arial', 14), justify=tk.CENTER)
         
         # Reset detection displays
@@ -906,7 +858,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.distance_var.set("N/A")
         self.liveness_label.config(fg='#58a6ff')
         self.confidence_var.set("N/A")
-        self.confidence_label.config(fg='#8b949e')
         
         self.update_stats_display()
         self.update_debug_display()
@@ -1064,8 +1015,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 employee_db[self.registration_name] = self.registration_state['embeddings']
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
                 
-                print(f"✓ Registered '{self.registration_name}' with {len(self.registration_state['embeddings'])} poses")
-                self.status_text.set(f"✓ Registered '{self.registration_name}' successfully!")
+                print(f"[OK] Registered '{self.registration_name}' with {len(self.registration_state['embeddings'])} poses")
+                self.status_text.set(f"[OK] Registered '{self.registration_name}' successfully!")
                 messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!")
                 dialog.destroy()
             except Exception as e:
@@ -1096,15 +1047,18 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             try:
                 # Check if camera is still valid
                 if self.cap is None or not self.cap.isOpened():
-                    print("✗ Camera is no longer available")
+                    print("[ERROR] Camera is no longer available")
                     self.window.after(0, lambda: self.handle_camera_failure())
                     break
                 
-                ret, frame = self.cap.read()
+                # Thread-safe camera read with lock
+                with self.camera_lock:
+                    ret, frame = self.cap.read()
+                
                 if not ret or frame is None or frame.size == 0:
                     consecutive_errors += 1
                     if consecutive_errors >= max_consecutive_errors:
-                        print(f"✗ Too many consecutive frame read errors ({consecutive_errors}). Stopping camera.")
+                        print(f"[ERROR] Too many consecutive frame read errors ({consecutive_errors}). Stopping camera.")
                         self.window.after(0, lambda: self.handle_camera_failure())
                         break
                     time.sleep(0.01)
@@ -1117,7 +1071,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 consecutive_errors += 1
                 print(f"Frame capture error: {e}")
                 if consecutive_errors >= max_consecutive_errors:
-                    print(f"✗ Too many errors. Stopping camera.")
+                    print(f"[ERROR] Too many errors. Stopping camera.")
                     self.window.after(0, lambda: self.handle_camera_failure())
                     break
                 time.sleep(0.01)
@@ -1325,15 +1279,23 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         is_live = True  # Default to Real
                         # Check emotion independently of PROCESS_EVERY_N_FRAMES
                         should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)
-                        if should_check_emotion:
+                        if should_check_emotion and self.emotion_analysis_enabled:
                             try:
                                 rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
                                 emo, is_live = analyze_emotion_and_liveness(rgb_face)
                                 self.last_emotion = emo
                                 self.last_liveness = 'Real' if is_live else 'Spoof'
+                                self.emotion_failure_count = 0  # Reset on success
                                 print(f"[Emotion] Detected: {emo}, Liveness: {'Real' if is_live else 'Spoof'}")
                             except Exception as e:
-                                print(f"DeepFace analyze error: {e}")
+                                self.emotion_failure_count += 1
+                                print(f"[WARNING] Emotion analysis error ({self.emotion_failure_count}/10): {e}")
+                                
+                                # Graceful degradation: disable after 10 consecutive failures
+                                if self.emotion_failure_count >= 10:
+                                    self.emotion_analysis_enabled = False
+                                    print("❌ Emotion analysis disabled due to repeated failures. Recognition will continue.")
+                                
                                 is_live = True
                                 self.last_liveness = 'Real'
                         else:
@@ -1637,7 +1599,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 
                 if self.state_locked:
                     # Show locked state indicator with lock icon
-                    status_text = "🔒 LOCKED"
+                    status_text = "LOCKED"
                     status_color = (46, 204, 113)  # Green
                     (tw, th), _ = cv2.getTextSize(status_text, font_status, 0.6, 2)
                     
@@ -1792,20 +1754,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         else:
             self.distance_var.set("N/A")
         
-        # Phase 7: Update confidence display
-        if self.last_confidence > 0:
-            self.confidence_var.set(f"{self.last_confidence:.1f}%")
-            
-            # Color-code confidence
-            if self.last_confidence >= 80:
-                self.confidence_label.config(fg='#2ecc71')  # Green
-            elif self.last_confidence >= 60:
-                self.confidence_label.config(fg='#f39c12')  # Yellow
-            else:
-                self.confidence_label.config(fg='#e74c3c')  # Red
-        else:
-            self.confidence_var.set("N/A")
-            self.confidence_label.config(fg='#6c757d')
         
         # Update debug panel
         self.update_debug_panel()
@@ -2322,9 +2270,26 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             self.explainer = ExplainabilityEngine(verification_model, DEVICE)
         
         try:
-            # Generate attention map
+            # Generate attention map on full tensor
             attention_map = self.explainer.generate_attention_map(self.current_face_tensor)
-            overlay = self.explainer.overlay_attention_on_image(self.current_face_image, attention_map, alpha=0.6)
+            
+            # Apply oval mask to suppress edge regions (soft falloff)
+            h, w = attention_map.shape
+            y, x = np.ogrid[:h, :w]
+            center_y, center_x = h // 2, w // 2
+            
+            # Create oval mask (wider horizontally for face shape)
+            mask = ((x - center_x)**2 / (w * 0.35)**2 + 
+                    (y - center_y)**2 / (h * 0.4)**2) <= 1
+            
+            # Smooth mask edges with Gaussian blur
+            from scipy.ndimage import gaussian_filter
+            mask = gaussian_filter(mask.astype(float), sigma=h*0.05)
+            
+            # Apply mask to attention map (suppresses edges, keeps center)
+            attention_map_masked = attention_map * mask
+            
+            overlay = self.explainer.overlay_attention_on_image(self.current_face_image, attention_map_masked, alpha=0.6)
             
             # Show in new window
             win = tk.Toplevel(self.window)
@@ -2335,10 +2300,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             # Header
             header = tk.Frame(win, bg='#161b22', relief='solid', borderwidth=1)
             header.pack(fill=tk.X, padx=10, pady=10)
-            tk.Label(header, text="CBAM Attention Map", font=('Arial', 14, 'bold'), 
+            tk.Label(header, text="Face Verification Attention Map", font=('Arial', 14, 'bold'), 
                     fg='#58a6ff', bg='#161b22').pack(pady=10)
-            tk.Label(header, text="Shows which facial regions the AI model focuses on", 
-                    font=('Arial', 10), fg='#8b949e', bg='#161b22').pack(pady=(0, 10))
+            tk.Label(header, text="Shows which facial regions the model uses for identity matching", 
+                    font=('Arial', 10), fg='#8b949e', bg='#161b22').pack(pady=(0, 5))
+            tk.Label(header, text="⚠️ Note: This visualizes FACE VERIFICATION (embedding extraction), not emotion detection", 
+                    font=('Arial', 9, 'italic'), fg='#f39c12', bg='#161b22').pack(pady=(0, 10))
             
             # Image
             img_frame = tk.Frame(win, bg='#0d1117')

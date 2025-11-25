@@ -108,7 +108,16 @@ class ExplainabilityEngine:
             cam = F.interpolate(cam, size=image_tensor.shape[2:], 
                               mode='bilinear', align_corners=False)
             
-            return cam.squeeze().cpu().numpy()
+            # Convert to numpy for percentile normalization
+            cam_np = cam.squeeze().cpu().numpy()
+            
+            # Percentile normalization to suppress edge artifacts (ignore top 5% outliers)
+            p5 = np.percentile(cam_np, 5)
+            p95 = np.percentile(cam_np, 95)
+            cam_np = np.clip(cam_np, p5, p95)
+            cam_np = (cam_np - p5) / (p95 - p5 + 1e-8)
+            
+            return cam_np
         else:
             # Fallback: return uniform attention
             h, w = image_tensor.shape[2:]
