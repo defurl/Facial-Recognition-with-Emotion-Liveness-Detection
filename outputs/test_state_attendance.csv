@@ -1,0 +1,2 @@
+timestamp,employee_name,confidence_distance,emotion,liveness_status
+2025-11-23T21:23:32.556877,test_user,0.3500,Happy,Real
