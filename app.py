@@ -249,8 +249,8 @@ class AttendanceSystemGUI:
         
         # Processing control - optimized for performance
         self.frame_count = 0
-        self.PROCESS_EVERY_N_FRAMES = max(3, PROCESS_EVERY_N_FRAMES)  # Min 3 frames to reduce lag
-        self.EMOTION_EVERY_N_FRAMES = 15  # Process emotion every 15 frames (~0.5 seconds) for faster updates
+        self.PROCESS_EVERY_N_FRAMES = max(10, PROCESS_EVERY_N_FRAMES)  # Process every 10 frames to reduce lag - was 3
+        self.EMOTION_EVERY_N_FRAMES = 60  # Process emotion every 60 frames (~2 seconds) to reduce lag - was 15
         self.last_processed_frame = 0  # Track last processed frame time
         self.last_emotion = "Neutral"
         self.last_liveness = "Unknown"
@@ -291,6 +291,10 @@ class AttendanceSystemGUI:
         # Emotion analysis failure tracking for graceful degradation
         self.emotion_failure_count = 0
         self.emotion_analysis_enabled = True
+        
+        # Async emotion analysis to prevent blocking
+        self.emotion_thread_running = False
+        self.last_emotion_check_frame = 0
         
         # Recognition statistics
         self.recognition_stats = {
@@ -1225,7 +1229,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         cv2.putText(frame, f"Hold steady... {remaining}", (10, h - 40), 
                                    cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
             
+            # ========== TIMING: Face Detection ==========
+            detect_start = time.time()
             faces = detect_faces(frame)
+            detect_time = (time.time() - detect_start) * 1000  # Convert to ms
+            if self.frame_count % 30 == 0:  # Log every second at 30fps
+                print(f"[TIMING] Face Detection: {detect_time:.2f}ms | Faces Found: {len(faces)}")
+            
             h, w = frame.shape[:2]
             
             # Track if multiple faces detected
@@ -1272,44 +1282,73 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         box_color = (255, 165, 0)  # Orange for registration
                 # Only process primary face for verification when NOT in registration mode AND not locked
                 elif is_primary and not self.state_locked and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
+                    # ========== TIMING: Processing Frame ==========
+                    process_start = time.time()
+                    print(f"\n[PROCESSING] Frame #{self.frame_count} - Starting verification pipeline...")
+                    
+                    crop_start = time.time()
                     cropped_face = crop_face_with_padding(frame, x, y, w, h)
+                    crop_time = (time.time() - crop_start) * 1000
+                    print(f"  [TIMING] Face Crop: {crop_time:.2f}ms")
 
                     if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
+                        resize_start = time.time()
                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+                        resize_time = (time.time() - resize_start) * 1000
+                        print(f"  [TIMING] Face Resize: {resize_time:.2f}ms")
 
                         # Multi-method liveness detection + emotion analysis
                         is_live = True  # Default to Real
                         liveness_confidence = 0.0
                         # Check emotion and liveness independently of PROCESS_EVERY_N_FRAMES
-                        should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)
-                        if should_check_emotion and self.emotion_analysis_enabled:
-                            try:
-                                rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                                emo, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(rgb_face)
-                                self.last_emotion = emo
-                                self.last_liveness = 'Real' if is_live else 'Spoof'
-                                self.last_liveness_confidence = liveness_confidence  # Store for UI
-                                self.emotion_failure_count = 0  # Reset on success
-                                
-                                # Log with liveness confidence
-                                print(f"[Emotion] {emo} | Liveness: {'Real' if is_live else 'Spoof'} "
-                                      f"({liveness_confidence:.1%} confidence)")
-                                if not is_live:
-                                    print(f"[Liveness Details] {liveness_details}")
-                            except Exception as e:
-                                self.emotion_failure_count += 1
-                                print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
-                                
-                                # Graceful degradation: disable after 10 consecutive failures
-                                if self.emotion_failure_count >= 10:
-                                    self.emotion_analysis_enabled = False
-                                    print("[ERROR] Emotion/liveness analysis disabled due to repeated failures. Recognition will continue.")
-                                
-                                is_live = True
-                                self.last_liveness = 'Real'
-                        else:
-                            # Reuse last liveness result between emotion checks
-                            is_live = (self.last_liveness == 'Real')
+                        # Skip emotion check if state is locked (identity already confirmed)
+                        should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0) and not self.state_locked
+                        
+                        # Run emotion analysis asynchronously to prevent blocking
+                        if should_check_emotion and self.emotion_analysis_enabled and not self.emotion_thread_running:
+                            self.emotion_thread_running = True
+                            self.last_emotion_check_frame = self.frame_count
+                            
+                            # Copy face data for background thread
+                            rgb_face_copy = cv2.cvtColor(cropped_face.copy(), cv2.COLOR_BGR2RGB)
+                            
+                            def async_emotion_analysis():
+                                try:
+                                    # ========== TIMING: Emotion & Liveness Analysis (ASYNC) ==========
+                                    emotion_start = time.time()
+                                    print(f"  [MODULE] Starting Emotion & Liveness Analysis (async)...")
+                                    
+                                    emo, is_live_result, liveness_conf, liveness_details = analyze_emotion_and_liveness(rgb_face_copy)
+                                    
+                                    emotion_time = (time.time() - emotion_start) * 1000
+                                    print(f"  [TIMING] Emotion & Liveness (async): {emotion_time:.2f}ms")
+                                    
+                                    # Update results (thread-safe - these are simple assignments)
+                                    self.last_emotion = emo
+                                    self.last_liveness = 'Real' if is_live_result else 'Spoof'
+                                    self.last_liveness_confidence = liveness_conf
+                                    self.emotion_failure_count = 0
+                                    
+                                    print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
+                                          f"({liveness_conf:.1%} confidence)")
+                                    if not is_live_result:
+                                        print(f"  [Liveness Details] {liveness_details}")
+                                except Exception as e:
+                                    self.emotion_failure_count += 1
+                                    print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
+                                    
+                                    if self.emotion_failure_count >= 10:
+                                        self.emotion_analysis_enabled = False
+                                        print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
+                                finally:
+                                    self.emotion_thread_running = False
+                            
+                            # Spawn background thread
+                            threading.Thread(target=async_emotion_analysis, daemon=True).start()
+                            print(f"  [ASYNC] Emotion analysis running in background thread...")
+                        
+                        # Use last liveness result (updated asynchronously)
+                        is_live = (self.last_liveness == 'Real')
 
                         if not is_live:
                             self.last_identity = "Spoof Detected"
@@ -1317,20 +1356,32 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         else:
                             # Verification with multi-embedding support
                             try:
+                                    # ========== TIMING: Face Verification ==========
+                                    verification_start = time.time()
+                                    print(f"  [MODULE] Starting Face Verification...")
+                                    
                                     # Avoid disk I/O: convert cv2 image to PIL directly
+                                    preprocess_start = time.time()
                                     rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
                                     pil_image = Image.fromarray(rgb).convert('RGB')
                                     image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+                                    preprocess_time = (time.time() - preprocess_start) * 1000
+                                    print(f"    [TIMING] Preprocessing: {preprocess_time:.2f}ms")
 
+                                    embedding_start = time.time()
                                     with torch.no_grad():
                                         trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+                                    embedding_time = (time.time() - embedding_start) * 1000
+                                    print(f"    [TIMING] Embedding Generation: {embedding_time:.2f}ms")
 
                                     min_distance = float('inf')
                                     self.last_identity = "Not Registered"
                                     best_match = None
 
                                     # Multi-embedding comparison
+                                    comparison_start = time.time()
                                     best_match_data = None  # Track the employee data for pose matching
+                                    print(f"    [MODULE] Comparing with {len(employee_db)} employees...")
                                     for name, saved_data in employee_db.items():
                                         if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
                                             # Compare against all stored embeddings, use minimum distance
@@ -1347,6 +1398,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             best_match = name
                                             best_match_data = saved_data  # Store for pose matching
 
+                                    comparison_time = (time.time() - comparison_start) * 1000
+                                    print(f"    [TIMING] Database Comparison: {comparison_time:.2f}ms")
+                                    
                                     # Load current threshold (may have been adjusted by user)
                                     current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                                     
@@ -1354,10 +1408,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                                     confidence = max(0, min(100, (1 - min_distance / threshold) * 100))
                                     
+                                    print(f"    [RESULT] Best Match: {best_match or 'None'} | Distance: {min_distance:.4f} | Threshold: {threshold:.4f}")
+                                    
                                     # Determine identity for this frame
                                     frame_identity = best_match if min_distance < current_threshold else "Not Registered"
                                     
                                     # Add result to confidence buffer (if not locked yet)
+                                    buffer_start = time.time()
                                     if not self.state_locked:
                                         current_time = time.time()
                                         self.confidence_buffer.append((
@@ -1483,7 +1540,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                     'max_frames': 30
                                                 }
                                     
+                                    buffer_time = (time.time() - buffer_start) * 1000
+                                    if buffer_time > 5:  # Only log if significant
+                                        print(f"    [TIMING] Confidence Buffer: {buffer_time:.2f}ms")
+                                    
                                     # xAI: Store face data for explainability features
+                                    xai_start = time.time()
                                     self.current_face_tensor = image_tensor
                                     self.current_face_image = rgb  # RGB numpy array
                                     
@@ -1498,6 +1560,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             self.current_explanation['quality_message'] = quality_exp['overall_message']
                                         except Exception as e:
                                             print(f"[WARNING] Explanation generation failed: {e}")
+                                    xai_time = (time.time() - xai_start) * 1000
+                                    if xai_time > 5:  # Only log if significant
+                                        print(f"    [TIMING] xAI Explanation: {xai_time:.2f}ms")
                                     
                                     # Store kNN neighbors (for kNN analysis button)
                                     # TODO: Implement proper kNN tracking when available
@@ -1515,6 +1580,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         self.matched_pose_index = 0
                                     
                                     # Phase 8: Auto-mark attendance for recognized faces
+                                    attendance_start = time.time()
                                     if self.last_identity != "Not Registered":
                                         # Only attempt once per cooldown period to avoid repeated I/O
                                         current_time = time.time()
@@ -1523,6 +1589,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         # Attempt marking only if it's been more than 5 seconds since last attempt
                                         if current_time - last_attempt > 5:
                                             self.attendance_attempt_cache[self.last_identity] = current_time
+                                            print(f"    [MODULE] Triggering async attendance marking...")
                                             
                                             # Run attendance marking in background thread to avoid blocking GUI
                                             def mark_async():
@@ -1539,6 +1606,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                     print(f"Attendance marking error: {e}")
                                             
                                             threading.Thread(target=mark_async, daemon=True).start()
+                                    attendance_time = (time.time() - attendance_start) * 1000
+                                    if attendance_time > 1:
+                                        print(f"    [TIMING] Attendance Check: {attendance_time:.2f}ms")
+                                    
+                                    # ========== TOTAL TIMING ==========
+                                    total_process_time = (time.time() - process_start) * 1000
+                                    print(f"  [TIMING] *** TOTAL PROCESSING TIME: {total_process_time:.2f}ms ***\n")
                             except Exception as e:
                                 print(f"Verification error: {e}")
                                 self.last_identity = "Error"
@@ -1675,6 +1749,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 self.frame_queue.put_nowait(frame)
             except queue.Full:
                 # Skip this frame to prevent lag
+                if self.frame_count % 30 == 0:
+                    print(f"[WARNING] Frame queue full! Skipping frame {self.frame_count} to prevent lag.")
                 pass
 
     def update_display(self):
@@ -1683,30 +1759,46 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             return
 
         try:
+            display_start = time.time()
             # Clear queue if backed up to prevent lag
             frame = None
+            frames_skipped = 0
             while not self.frame_queue.empty():
                 try:
+                    if frame is not None:
+                        frames_skipped += 1
                     frame = self.frame_queue.get_nowait()
                 except queue.Empty:
                     break
             
+            if frames_skipped > 0 and self.frame_count % 30 == 0:
+                print(f"[UI] Skipped {frames_skipped} frame(s) to catch up")
+            
             if frame is not None:
+                render_start = time.time()
                 # Resize frame to fit display window
                 frame_resized = cv2.resize(frame, (self.video_width, self.video_height))
 
                 frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame_rgb)
                 imgtk = ImageTk.PhotoImage(image=img)
+                render_time = (time.time() - render_start) * 1000
 
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk, text="")
+                
+                if render_time > 10 and self.frame_count % 30 == 0:  # Log if render is slow
+                    print(f"[UI TIMING] Frame Rendering: {render_time:.2f}ms")
 
                 # Update UI elements less frequently (every 3 display updates)
                 if self.frame_count % 3 == 0:
+                    update_ui_start = time.time()
                     self.update_detection_display()
                     self.update_stats_display()
                     self.update_debug_display()
+                    update_ui_time = (time.time() - update_ui_start) * 1000
+                    if update_ui_time > 10 and self.frame_count % 30 == 0:
+                        print(f"[UI TIMING] UI Elements Update: {update_ui_time:.2f}ms")
             
         except Exception as e:
             print(f"Display error: {e}")
