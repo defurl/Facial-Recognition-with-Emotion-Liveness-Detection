@@ -12,37 +12,24 @@ emotion_labels = {
     'neutral': 'Neutral'
 }
 
-# Lazy load liveness detector
+# Lazy load liveness detector (using traditional CV-based detector)
 _liveness_detector = None
-_liveness_model_path = None
 
 def _get_liveness_detector():
-    """Lazy initialization of liveness detector"""
-    global _liveness_detector, _liveness_model_path
+    """Lazy initialization of traditional CV-based liveness detector"""
+    global _liveness_detector
     
     if _liveness_detector is None:
-        # Try to find liveness model, fallback to backbone
-        if os.path.exists('outputs/liveness_detector.pth'):
-            _liveness_model_path = 'outputs/liveness_detector.pth'
-            print("[Liveness] Using trained liveness model")
-        else:
-            _liveness_model_path = 'best_face_embedding_model.pth'
-            print("[Liveness] Using backbone model (train liveness detector for better accuracy)")
-        
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        from liveness_cnn import get_cnn_liveness_detector
-        _liveness_detector = get_cnn_liveness_detector(
-            model_path=_liveness_model_path,
-            device=device
-        )
+        print("[Liveness] Using traditional CV-based liveness detector (LBP + Color + Moiré)")
+        from liveness import get_liveness_detector
+        _liveness_detector = get_liveness_detector()
     
     return _liveness_detector
 
 
 def analyze_emotion_and_liveness(img_path):
     """
-    Analyze emotion using DeepFace and liveness using CNN-based detector.
+    Analyze emotion using DeepFace and liveness using traditional CV-based detector.
 
     args:
         img_path: Path or image array (RGB numpy array expected)
@@ -50,7 +37,7 @@ def analyze_emotion_and_liveness(img_path):
         emotion_label: str
         is_real: bool
         liveness_confidence: float (0-1)
-        liveness_details: dict
+        liveness_details: dict (includes 'texture', 'color', 'moire', 'motion', 'overall', 'decision')
     """
     emotion = 'Neutral'
     is_live = False

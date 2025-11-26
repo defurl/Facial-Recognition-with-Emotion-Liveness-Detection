@@ -578,10 +578,6 @@ class AttendanceSystemGUI:
         
         ttk.Button(xai_container, text="Show Attention Map", 
                   command=self.show_attention_map, style='XAI.TButton').pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(xai_container, text="kNN Neighbor Analysis", 
-                  command=self.show_knn_analysis, style='XAI.TButton').pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(xai_container, text="Explain Decision", 
-                  command=self.show_explanation, style='XAI.TButton').pack(fill=tk.X)
         
         # Debug panel (compact)
         debug_frame = ttk.LabelFrame(middle_panel, text="VERIFICATION DEBUG")
@@ -724,8 +720,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         for idx in preferred_indices:
             cap = None
             try:
-                print(f"Trying camera {idx}...")
-                cap = cv2.VideoCapture(idx)
+                print(f"Trying camera {0}...")
+                cap = cv2.VideoCapture(0)
                 
                 if cap is None:
                     continue
