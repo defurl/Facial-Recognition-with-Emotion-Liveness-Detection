@@ -254,6 +254,7 @@ class AttendanceSystemGUI:
         self.last_processed_frame = 0  # Track last processed frame time
         self.last_emotion = "Neutral"
         self.last_liveness = "Unknown"
+        self.last_liveness_confidence = 0.0  # Liveness detection confidence (0-1)
         self.last_identity = "Not Registered"
         self.last_distance = float('inf')
         self.last_confidence = 0.0  # Phase 7: Confidence percentage
@@ -548,7 +549,11 @@ class AttendanceSystemGUI:
         self.liveness_var = tk.StringVar(value="Unknown")
         self.liveness_label = tk.Label(liveness_container, textvariable=self.liveness_var, 
                                       font=('Arial', 11, 'bold'), bg='#21262d', fg='#58a6ff')
-        self.liveness_label.pack(pady=(0, 5))
+        self.liveness_label.pack(pady=(0, 0))
+        # Liveness confidence percentage
+        self.liveness_confidence_var = tk.StringVar(value="")
+        tk.Label(liveness_container, textvariable=self.liveness_confidence_var, 
+                font=('Arial', 8), bg='#21262d', fg='#8b949e').pack(pady=(0, 5))
         
         # Distance
         distance_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
@@ -855,6 +860,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.identity_label.config(text="No face detected", bg='#1f6feb', fg='#ffffff')
         self.emotion_var.set("Neutral")
         self.liveness_var.set("Unknown")
+        self.liveness_confidence_var.set("")
         self.distance_var.set("N/A")
         self.liveness_label.config(fg='#58a6ff')
         self.confidence_var.set("N/A")
@@ -1275,26 +1281,33 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                     if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
 
-                        # DeepFace-based emotion + liveness - separate check from frame processing
+                        # Multi-method liveness detection + emotion analysis
                         is_live = True  # Default to Real
-                        # Check emotion independently of PROCESS_EVERY_N_FRAMES
+                        liveness_confidence = 0.0
+                        # Check emotion and liveness independently of PROCESS_EVERY_N_FRAMES
                         should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)
                         if should_check_emotion and self.emotion_analysis_enabled:
                             try:
                                 rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                                emo, is_live = analyze_emotion_and_liveness(rgb_face)
+                                emo, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(rgb_face)
                                 self.last_emotion = emo
                                 self.last_liveness = 'Real' if is_live else 'Spoof'
+                                self.last_liveness_confidence = liveness_confidence  # Store for UI
                                 self.emotion_failure_count = 0  # Reset on success
-                                print(f"[Emotion] Detected: {emo}, Liveness: {'Real' if is_live else 'Spoof'}")
+                                
+                                # Log with liveness confidence
+                                print(f"[Emotion] {emo} | Liveness: {'Real' if is_live else 'Spoof'} "
+                                      f"({liveness_confidence:.1%} confidence)")
+                                if not is_live:
+                                    print(f"[Liveness Details] {liveness_details}")
                             except Exception as e:
                                 self.emotion_failure_count += 1
-                                print(f"[WARNING] Emotion analysis error ({self.emotion_failure_count}/10): {e}")
+                                print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
                                 
                                 # Graceful degradation: disable after 10 consecutive failures
                                 if self.emotion_failure_count >= 10:
                                     self.emotion_analysis_enabled = False
-                                    print("❌ Emotion analysis disabled due to repeated failures. Recognition will continue.")
+                                    print("[ERROR] Emotion/liveness analysis disabled due to repeated failures. Recognition will continue.")
                                 
                                 is_live = True
                                 self.last_liveness = 'Real'
@@ -1740,13 +1753,18 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.emotion_var.set(self.last_emotion)
         self.liveness_var.set(self.last_liveness)
         
-        # Color-code liveness
+        # Color-code liveness and show confidence
         if self.last_liveness == "Real":
             self.liveness_label.config(fg='#27ae60')
+            self.liveness_confidence_var.set(f"{self.last_liveness_confidence:.0%} confidence")
         elif self.last_liveness == "Spoof":
             self.liveness_label.config(fg='#e74c3c')
+            # Show inverse confidence for spoof (100% - confidence = certainty of spoof)
+            spoof_certainty = 1.0 - self.last_liveness_confidence
+            self.liveness_confidence_var.set(f"{spoof_certainty:.0%} certainty")
         else:
             self.liveness_label.config(fg='#3498db')
+            self.liveness_confidence_var.set("")
         
         # Update distance
         if self.last_distance != float('inf'):
