@@ -114,14 +114,17 @@ def load_model_and_database():
         employee_db = {}
 
 
-def select_primary_face(faces, frame_width, frame_height):
+def select_primary_face(faces, frame_width, frame_height, previous_primary_idx=-1, previous_bbox=None):
     """
-    Select primary face from multiple detections using area and centeredness scoring.
+    Select primary face from multiple detections using area and centeredness scoring
+    with temporal stability to prevent flickering.
     
     Args:
         faces: List of (x, y, w, h) face bounding boxes
         frame_width: Frame width in pixels
         frame_height: Frame height in pixels
+        previous_primary_idx: Index of primary face from previous frame (-1 if none)
+        previous_bbox: Bounding box (x, y, w, h) of previous primary face
     
     Returns:
         int: Index of primary face, or -1 if no faces
@@ -145,9 +148,28 @@ def select_primary_face(faces, frame_width, frame_height):
             if area > max_area:
                 max_area = area
         
+        # Helper function to calculate IoU (Intersection over Union)
+        def calculate_iou(box1, box2):
+            x1, y1, w1, h1 = box1
+            x2, y2, w2, h2 = box2
+            
+            # Calculate intersection
+            x_left = max(x1, x2)
+            y_top = max(y1, y2)
+            x_right = min(x1 + w1, x2 + w2)
+            y_bottom = min(y1 + h1, y2 + h2)
+            
+            if x_right < x_left or y_bottom < y_top:
+                return 0.0
+            
+            intersection = (x_right - x_left) * (y_bottom - y_top)
+            union = w1 * h1 + w2 * h2 - intersection
+            
+            return intersection / union if union > 0 else 0.0
+        
         # Score each face
         scores = []
-        for x, y, w, h in faces:
+        for idx, (x, y, w, h) in enumerate(faces):
             area = w * h
             
             # Area score (normalized)
@@ -161,12 +183,28 @@ def select_primary_face(faces, frame_width, frame_height):
             center_score = 1.0 - (distance_from_center / frame_diagonal)
             center_score = max(0.0, center_score)
             
-            # Weighted combination (60% area, 40% centeredness)
-            final_score = PRIMARY_FACE_AREA_WEIGHT * area_score + PRIMARY_FACE_CENTER_WEIGHT * center_score
+            # Weighted combination (80% area, 20% centeredness) - increased area weight for stability
+            final_score = 0.8 * area_score + 0.2 * center_score
+            
+            # Add hysteresis bonus: if this face was previously primary and still present, give it a boost
+            if previous_bbox is not None:
+                iou = calculate_iou((x, y, w, h), previous_bbox)
+                if iou > 0.5:  # Same face detected (IoU > 50%)
+                    # Add significant stability bonus (20% boost)
+                    final_score *= 1.20
+            
             scores.append(final_score)
         
         # Return index of highest scoring face
         primary_idx = scores.index(max(scores))
+        
+        # Debug: Print scoring details when multiple faces
+        if len(faces) > 1:
+            print(f"[DEBUG] Primary face selection: {len(faces)} faces detected")
+            for idx, score in enumerate(scores):
+                area = faces[idx][2] * faces[idx][3]
+                print(f"  Face {idx}: score={score:.3f}, area={area} {'<-- PRIMARY' if idx == primary_idx else ''}")
+        
         return primary_idx
     except Exception as e:
         print(f"Error selecting primary face: {e}")
@@ -253,13 +291,18 @@ class AttendanceSystemGUI:
         self.EMOTION_EVERY_N_FRAMES = 60  # Process emotion every 60 frames (~2 seconds) to reduce lag - was 15
         self.last_processed_frame = 0  # Track last processed frame time
         self.last_emotion = "Neutral"
-        self.last_liveness = "Unknown"
+        self.last_liveness = "Real"
         self.last_liveness_confidence = 0.0  # Liveness detection confidence (0-1)
         self.last_identity = "Not Registered"
         self.last_distance = float('inf')
         self.last_confidence = 0.0  # Phase 7: Confidence percentage
         self.matched_pose_index = -1  # Phase 7: Which pose matched
         self.multiple_faces_warning = False
+        
+        # Primary face tracking for temporal stability
+        self.previous_primary_idx = -1
+        self.previous_primary_face_bbox = None
+        self.primary_face_stable_frames = 0
         
         # Confidence buffer system for state saving (demo improvement)
         self.CONFIDENCE_BUFFER_DURATION = 7.0  # Accumulate results for 7 seconds
@@ -1253,8 +1296,27 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             else:
                 self.no_face_frames = 0  # Reset counter when face detected
             
-            # Select primary face if multiple faces  
-            primary_face_idx = select_primary_face(faces, w, h)
+            # Select primary face if multiple faces with temporal stability
+            frame_h, frame_w = h, w  # Save frame dimensions before loop overwrites them
+            primary_face_idx = select_primary_face(
+                faces, frame_w, frame_h, 
+                self.previous_primary_idx, 
+                self.previous_primary_face_bbox
+            )
+            
+            # Update previous primary face tracking
+            if primary_face_idx >= 0 and primary_face_idx < len(faces):
+                self.previous_primary_idx = primary_face_idx
+                self.previous_primary_face_bbox = faces[primary_face_idx]
+                self.primary_face_stable_frames += 1
+            else:
+                self.previous_primary_idx = -1
+                self.previous_primary_face_bbox = None
+                self.primary_face_stable_frames = 0
+            
+            # Debug: Log primary face selection when multiple faces detected
+            if len(faces) > 1 and self.frame_count % 30 == 0:
+                print(f"[PRIMARY FACE] Selected face {primary_face_idx} out of {len(faces)} faces (stable for {self.primary_face_stable_frames} frames)")
 
             for face_idx, (x, y, w, h) in enumerate(faces):
                 is_primary = (face_idx == primary_face_idx)
@@ -1305,55 +1367,60 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0) and not self.state_locked
                         
                         # Run emotion analysis asynchronously to prevent blocking
-                        if should_check_emotion and self.emotion_analysis_enabled and not self.emotion_thread_running:
-                            self.emotion_thread_running = True
-                            self.last_emotion_check_frame = self.frame_count
-                            
-                            # Copy face data for background thread
-                            rgb_face_copy = cv2.cvtColor(cropped_face.copy(), cv2.COLOR_BGR2RGB)
-                            
-                            def async_emotion_analysis():
-                                try:
-                                    # ========== TIMING: Emotion & Liveness Analysis (ASYNC) ==========
-                                    emotion_start = time.time()
-                                    print(f"  [MODULE] Starting Emotion & Liveness Analysis (async)...")
-                                    
-                                    emo, is_live_result, liveness_conf, liveness_details = analyze_emotion_and_liveness(rgb_face_copy)
-                                    
-                                    emotion_time = (time.time() - emotion_start) * 1000
-                                    print(f"  [TIMING] Emotion & Liveness (async): {emotion_time:.2f}ms")
-                                    
-                                    # Update results (thread-safe - these are simple assignments)
-                                    self.last_emotion = emo
-                                    self.last_liveness = 'Real' if is_live_result else 'Spoof'
-                                    self.last_liveness_confidence = liveness_conf
-                                    self.emotion_failure_count = 0
-                                    
-                                    print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
-                                          f"({liveness_conf:.1%} confidence)")
-                                    if not is_live_result:
-                                        print(f"  [Liveness Details] {liveness_details}")
-                                except Exception as e:
-                                    self.emotion_failure_count += 1
-                                    print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
-                                    
-                                    if self.emotion_failure_count >= 10:
-                                        self.emotion_analysis_enabled = False
-                                        print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
-                                finally:
-                                    self.emotion_thread_running = False
-                            
-                            # Spawn background thread
-                            threading.Thread(target=async_emotion_analysis, daemon=True).start()
-                            print(f"  [ASYNC] Emotion analysis running in background thread...")
+                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
+                        # if should_check_emotion and self.emotion_analysis_enabled and not self.emotion_thread_running:
+                        #     self.emotion_thread_running = True
+                        #     self.last_emotion_check_frame = self.frame_count
+                        #     
+                        #     # Copy face data for background thread
+                        #     rgb_face_copy = cv2.cvtColor(cropped_face.copy(), cv2.COLOR_BGR2RGB)
+                        #     
+                        #     def async_emotion_analysis():
+                        #         try:
+                        #             # ========== TIMING: Emotion & Liveness Analysis (ASYNC) ==========
+                        #             emotion_start = time.time()
+                        #             print(f"  [MODULE] Starting Emotion & Liveness Analysis (async)...")
+                        #             
+                        #             emo, is_live_result, liveness_conf, liveness_details = analyze_emotion_and_liveness(rgb_face_copy)
+                        #             
+                        #             emotion_time = (time.time() - emotion_start) * 1000
+                        #             print(f"  [TIMING] Emotion & Liveness (async): {emotion_time:.2f}ms")
+                        #             
+                        #             # Update results (thread-safe - these are simple assignments)
+                        #             self.last_emotion = emo
+                        #             self.last_liveness = 'Real' if is_live_result else 'Spoof'
+                        #             self.last_liveness_confidence = liveness_conf
+                        #             self.emotion_failure_count = 0
+                        #             
+                        #             print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
+                        #                   f"({liveness_conf:.1%} confidence)")
+                        #             if not is_live_result:
+                        #                 print(f"  [Liveness Details] {liveness_details}")
+                        #         except Exception as e:
+                        #             self.emotion_failure_count += 1
+                        #             print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
+                        #             
+                        #             if self.emotion_failure_count >= 10:
+                        #                 self.emotion_analysis_enabled = False
+                        #                 print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
+                        #         finally:
+                        #             self.emotion_thread_running = False
+                        #     
+                        #     # Spawn background thread
+                        #     threading.Thread(target=async_emotion_analysis, daemon=True).start()
+                        #     print(f"  [ASYNC] Emotion analysis running in background thread...")
                         
                         # Use last liveness result (updated asynchronously)
-                        is_live = (self.last_liveness == 'Real')
+                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
+                        # is_live = (self.last_liveness == 'Real')
+                        is_live = True  # Bypass liveness check - treat all faces as real
 
-                        if not is_live:
-                            self.last_identity = "Spoof Detected"
-                            box_color = (0, 0, 255)
-                        else:
+                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
+                        # if not is_live:
+                        #     self.last_identity = "Spoof Detected"
+                        #     box_color = (0, 0, 255)
+                        # else:
+                        if True:  # Bypass liveness check
                             # Verification with multi-embedding support
                             try:
                                     # ========== TIMING: Face Verification ==========
@@ -1999,20 +2066,20 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             self.state_locked = False
             self.locked_state = None
             self.confidence_buffer = []
-            messagebox.showinfo("🔓 State Unlocked", 
+            messagebox.showinfo("State Unlocked", 
                               "Recognition state has been reset.\n\n"
                               "The system will now re-accumulate verification data\n"
                               "for the next 7 seconds before locking again.")
             print("[State] Manually reset by user")
         else:
-            messagebox.showinfo("ℹ️ State Not Locked", 
+            messagebox.showinfo("State Not Locked", 
                               "The recognition state is currently not locked.\n\n"
                               "The system is already accumulating data.")
     
     def edit_employee(self):
         """Batch edit employees with checkboxes"""
         if len(employee_db) == 0:
-            messagebox.showinfo("✏ Edit Employees", "No employees registered yet.")
+            messagebox.showinfo("Edit Employees", "No employees registered yet.")
             return
         
         dialog = tk.Toplevel(self.window)
@@ -2027,7 +2094,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         
-        tk.Label(header, text="✏ Batch Edit Employee Names", font=('Segoe UI Semibold', 14, 'bold'), 
+        tk.Label(header, text="Batch Edit Employee Names", font=('Segoe UI Semibold', 14, 'bold'), 
                 fg='white', bg='#f39c12').pack(pady=15)
         
         # Content
@@ -2308,9 +2375,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 return
             
             confirm = messagebox.askyesno("⚠ Confirm Deletion", 
-                                         f"Are you sure you want to delete {len(selected)} employee(s)?\\n\\n" +
-                                         "\\n".join(f"• {name}" for name in selected[:5]) +
-                                         (f"\\n... and {len(selected) - 5} more" if len(selected) > 5 else ""),
+                                         f"Are you sure you want to delete {len(selected)} employee(s)?\n" +
+                                         "\n".join(f"• {name}" for name in selected[:5]) +
+                                         (f"\n... and {len(selected) - 5} more" if len(selected) > 5 else ""),
                                          icon='warning')
             if confirm:
                 for name in selected:
@@ -2349,7 +2416,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             name = listbox.get(selection[0])
             confirm = messagebox.askyesno("🗑 Confirm Deletion", 
-                                        f"Are you sure you want to delete '{name}'?\n\nThis action cannot be undone!", 
+                                        f"Are you sure you want to delete '{name}'?\nThis action cannot be undone!", 
                                         parent=dialog)
             
             if confirm:

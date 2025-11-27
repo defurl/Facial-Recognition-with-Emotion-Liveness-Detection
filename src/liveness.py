@@ -115,7 +115,7 @@ class LivenessDetector:
         # Threshold: 60% with gradual motion/temporal scoring
         # Real faces (still): 60-68% → Pass (gradual motion scoring helps)
         # ID cards: 45-58% → Reject (very low motion + temporal)
-        is_live = confidence >= 0.60
+        is_live = confidence >= 0.61
         
         details['overall'] = confidence
         details['decision'] = 'Real' if is_live else 'Spoof'
