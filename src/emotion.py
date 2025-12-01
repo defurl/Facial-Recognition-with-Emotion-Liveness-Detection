@@ -12,24 +12,39 @@ emotion_labels = {
     'neutral': 'Neutral'
 }
 
-# Lazy load liveness detector (using traditional CV-based detector)
+# Lazy load liveness detector (using trained CNN-based detector)
 _liveness_detector = None
 
 def _get_liveness_detector():
-    """Lazy initialization of traditional CV-based liveness detector"""
+    """Lazy initialization of CNN-based liveness detector with trained model"""
     global _liveness_detector
     
     if _liveness_detector is None:
-        print("[Liveness] Using traditional CV-based liveness detector (LBP + Color + Moiré)")
-        from liveness import get_liveness_detector
-        _liveness_detector = get_liveness_detector()
+        print("[Liveness] Using trained CNN-based liveness detector from outputs/liveness_detector.pth")
+        from liveness_cnn import get_cnn_liveness_detector
+        import torch
+        from pathlib import Path
+        
+        # Determine paths
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model_path = Path(__file__).parent.parent / 'outputs' / 'liveness_detector.pth'
+        
+        if not model_path.exists():
+            print(f"[WARNING] Trained model not found at {model_path}, falling back to traditional detector")
+            from liveness import get_liveness_detector
+            _liveness_detector = get_liveness_detector()
+        else:
+            _liveness_detector = get_cnn_liveness_detector(
+                model_path=str(model_path),
+                device=device
+            )
     
     return _liveness_detector
 
 
 def analyze_emotion_and_liveness(img_path):
     """
-    Analyze emotion using DeepFace and liveness using traditional CV-based detector.
+    Analyze emotion using DeepFace and liveness using trained CNN-based detector.
 
     args:
         img_path: Path or image array (RGB numpy array expected)
@@ -37,7 +52,7 @@ def analyze_emotion_and_liveness(img_path):
         emotion_label: str
         is_real: bool
         liveness_confidence: float (0-1)
-        liveness_details: dict (includes 'texture', 'color', 'moire', 'motion', 'overall', 'decision')
+        liveness_details: dict (CNN model returns 'spoof_prob', 'real_prob', 'smoothed_decision', etc.)
     """
     emotion = 'Neutral'
     is_live = False

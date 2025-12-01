@@ -122,7 +122,7 @@ class TemporalLivenessDetector:
         Initialize temporal liveness detector
         
         Args:
-            model_path: Path to trained LivenessCNN weights
+            model_path: Path to trained LivenessCNN weights (the full trained model)
             device: Device to run model on
             history_size: Number of frames to smooth over
             confidence_threshold: Minimum confidence to change state
@@ -130,10 +130,26 @@ class TemporalLivenessDetector:
         self.device = device
         self.confidence_threshold = confidence_threshold
         
-        # Load model
-        self.model = LivenessCNN(backbone_weights=model_path, freeze_backbone=False)
+        # Load trained model
+        # First create model architecture (without loading backbone weights separately)
+        self.model = LivenessCNN(backbone_weights=None, freeze_backbone=False)
+        
+        # Then load the fully trained weights (including liveness head)
+        print(f"[TemporalLiveness] Loading trained model from {model_path}")
+        checkpoint = torch.load(model_path, map_location=device)
+        
+        # Extract model state dict (handle checkpoint format from training)
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+            print(f"[TemporalLiveness] Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}, "
+                  f"val_acc: {checkpoint.get('val_acc', 0):.2f}%")
+        else:
+            state_dict = checkpoint
+        
+        self.model.load_state_dict(state_dict)
         self.model.to(device)
         self.model.eval()
+        print(f"[TemporalLiveness] Model loaded successfully")
         
         # Temporal smoothing
         self.history_size = history_size
