@@ -33,6 +33,7 @@ os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "1")
 os.environ.setdefault("GLOG_minloglevel", "2")  # Suppress MediaPipe logs
 
 import time
+import datetime
 import queue
 import threading
 import tkinter as tk
@@ -50,8 +51,8 @@ from config import (
 )
 from models import FaceEmbeddingCNN
 from data_loader import get_transforms
-from utils import detect_faces, crop_face_with_padding
-from emotion import analyze_emotion_and_liveness
+from utils import detect_faces, crop_face_with_padding, face_mesh_detector
+from emotion import analyze_emotion_and_liveness, reset_liveness_detector
 from attendance import AttendanceLogger
 from explainability import ExplainabilityEngine
 from deep_knn import knn_predict_with_confidence, get_knn_explanation_text
@@ -304,13 +305,13 @@ class AttendanceSystemGUI:
         self.previous_primary_face_bbox = None
         self.primary_face_stable_frames = 0
         
-        # Confidence buffer system for state saving (demo improvement)
-        self.CONFIDENCE_BUFFER_DURATION = 7.0  # Accumulate results for 7 seconds
-        self.confidence_buffer = []  # List of (timestamp, identity, confidence, emotion, liveness, distance, pose_idx)
-        self.locked_state = None  # Locked state: {'identity', 'confidence', 'emotion', 'liveness', 'distance', 'pose_idx', 'locked_at'}
-        self.state_locked = False  # Whether state is currently locked
-        self.no_face_frames = 0  # Counter for frames without face detection
-        self.NO_FACE_RESET_THRESHOLD = 30  # Reset locked state after 30 frames (~1 second) without face
+        # Identity lock system for seamless check-in
+        self.identity_lock_buffer = []  # List of (timestamp, identity, confidence) tuples
+        self.LOCK_DURATION = 3.0  # Accumulate verifications for 3 seconds (real time)
+        self.LOCK_MIN_VERIFICATIONS = 5  # Require 5 verifications (not 3) for more accuracy
+        self.locked_identity = None  # Currently locked identity
+        self.lock_timestamp = 0  # When the identity was locked
+        self.LOCK_DISPLAY_TIME = 2.0  # Show locked identity for 2 seconds before auto-reset
         
         # Phase 8: Attendance logger
         self.attendance_logger = AttendanceLogger(
@@ -458,52 +459,47 @@ class AttendanceSystemGUI:
                            background='#0d1117')
     
     def setup_ui(self):
-        """Setup dark theme UI with xAI visualization panels"""
+        """Setup simplified user-facing UI"""
         # Main container with dark theme
         main_container = tk.Frame(self.window, bg='#0d1117')
         main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        # Title header with accuracy display
-        title_frame = tk.Frame(main_container, bg='#0d1117')
-        title_frame.pack(fill=tk.X, pady=(0, 15))
+        # 4. Right Panel: Checked-in Identities (New Requirement)
+        # Pack RIGHT first so it claims the right side
+        right_panel = tk.Frame(main_container, bg='#0d1117', width=300)
+        right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        right_panel.pack_propagate(False)
         
-        # Left: Title
-        left_title = tk.Frame(title_frame, bg='#0d1117')
-        left_title.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Header
+        log_header = tk.Frame(right_panel, bg='#161b22', height=40)
+        log_header.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(log_header, text="RECENT CHECK-INS", font=('Arial', 11, 'bold'), 
+                fg='#58a6ff', bg='#161b22').pack(pady=10)
         
-        title_label = ttk.Label(left_title, text="Face Recognition System - xAI Enhanced", 
-                               style='Title.TLabel')
-        title_label.pack(side=tk.LEFT)
+        # Listbox for logs
+        self.log_listbox = tk.Listbox(right_panel, bg='#161b22', fg='#c9d1d9', 
+                                     font=('Arial', 10), borderwidth=0, highlightthickness=0)
+        self.log_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # 5. Employee Management (CRUD) - Bottom of Right Panel
+        crud_frame = ttk.LabelFrame(right_panel, text="EMPLOYEE MANAGEMENT")
+        crud_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(0, 0))
         
-        # Right: Status indicator and model accuracy badge
-        right_status = tk.Frame(title_frame, bg='#0d1117')
-        right_status.pack(side=tk.RIGHT)
+        crud_container = tk.Frame(crud_frame, bg='#161b22')
+        crud_container.pack(fill=tk.X, padx=10, pady=10)
         
-        # Model accuracy badge (prominent display)
-        accuracy_badge = tk.Frame(right_status, bg='#1f6feb', relief='raised', borderwidth=2)
-        accuracy_badge.pack(side=tk.LEFT, padx=(0, 15))
-        tk.Label(accuracy_badge, text="Model Accuracy", font=('Arial', 9, 'bold'), 
-                fg='#c9d1d9', bg='#1f6feb').pack(padx=10, pady=(5, 0))
-        self.accuracy_display = tk.Label(accuracy_badge, text="96.2%", font=('Arial', 18, 'bold'), 
-                                        fg='#3fb950', bg='#1f6feb')
-        self.accuracy_display.pack(padx=10, pady=(0, 5))
-        
-        # Status indicator
-        self.status_indicator = tk.Label(right_status, text="●", font=('Arial', 20), 
-                                        fg='#f85149', bg='#0d1117')
-        self.status_indicator.pack(side=tk.LEFT)
-        
-        # Main content area (3-column layout: video | info | xAI)
-        content_frame = tk.Frame(main_container, bg='#0d1117')
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Left panel (video + controls) - larger for visibility
-        left_panel = tk.Frame(content_frame, bg='#0d1117')
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        
-        # Video frame
-        video_frame = ttk.LabelFrame(left_panel, text="LIVE CAMERA FEED")
-        video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        ttk.Button(crud_container, text="View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(crud_container, text="View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(crud_container, text="Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(crud_container, text="Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X)
+
+        # Left Container for Video and Controls
+        left_container = tk.Frame(main_container, bg='#0d1117')
+        left_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 1. Video Feed (Top/Center)
+        video_frame = ttk.LabelFrame(left_container, text="LIVE CAMERA FEED")
+        video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
         # Video container
         video_container = tk.Frame(video_frame, bg='#0d0d0d', relief='solid', borderwidth=2,
@@ -519,203 +515,61 @@ class AttendanceSystemGUI:
         self.video_width = 640
         self.video_height = 480
         
-        # Controls frame
-        controls_frame = ttk.LabelFrame(left_panel, text="CAMERA CONTROLS")
+        # 2. Controls (Below Video)
+        controls_frame = ttk.LabelFrame(left_container, text="CONTROLS")
         controls_frame.pack(fill=tk.X, pady=(0, 10))
         
         control_buttons_frame = tk.Frame(controls_frame, bg='#161b22')
         control_buttons_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        self.start_button = ttk.Button(control_buttons_frame, text="START", 
-                                      command=self.start_camera, style='Primary.TButton', width=12)
-        self.start_button.pack(side=tk.LEFT, padx=(0, 5))
+        # Center the buttons
+        button_container = tk.Frame(control_buttons_frame, bg='#161b22')
+        button_container.pack(anchor=tk.CENTER)
         
-        self.stop_button = ttk.Button(control_buttons_frame, text="STOP", 
-                                     command=self.stop_camera, state=tk.DISABLED, style='Warning.TButton', width=12)
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.start_button = ttk.Button(button_container, text="START CAMERA", 
+                                      command=self.start_camera, style='Primary.TButton', width=20)
+        self.start_button.pack(side=tk.LEFT, padx=10)
         
-        self.register_button = ttk.Button(control_buttons_frame, text="REGISTER", 
-                                         command=self.start_registration, state=tk.DISABLED, style='Success.TButton', width=12)
-        self.register_button.pack(side=tk.LEFT)
+        self.stop_button = ttk.Button(button_container, text="STOP CAMERA", 
+                                     command=self.stop_camera, state=tk.DISABLED, style='Warning.TButton', width=20)
+        self.stop_button.pack(side=tk.LEFT, padx=10)
         
-        # Status frame
-        status_frame = ttk.LabelFrame(left_panel, text="SYSTEM STATUS")
-        status_frame.pack(fill=tk.X)
-        
-        status_container = tk.Frame(status_frame, bg='#161b22')
-        status_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.status_text = tk.StringVar(value="● System ready. Click 'Start' to begin recognition.")
-        self.status_label = ttk.Label(status_container, textvariable=self.status_text, 
-                                     style='Status.TLabel')
-        self.status_label.pack(anchor=tk.W)
-        
-        # Middle panel (detection info + confidence gauges)
-        middle_panel = tk.Frame(content_frame, bg='#0d1117', width=380)
-        middle_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        middle_panel.pack_propagate(False)
-        
-        # Detection results
-        detection_frame = ttk.LabelFrame(middle_panel, text="CURRENT DETECTION")
-        detection_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        detection_container = tk.Frame(detection_frame, bg='#161b22')
-        detection_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Identity display with larger, prominent text
-        identity_frame = tk.Frame(detection_container, bg='#1f6feb', relief='raised', borderwidth=2)
-        identity_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.identity_label = tk.Label(identity_frame, text="No face detected", 
-                                      font=('Arial', 14, 'bold'), fg='#ffffff', bg='#1f6feb',
-                                      padx=12, pady=15)
-        self.identity_label.pack(fill=tk.X)
-        
-        # Detection details grid
-        details_frame = tk.Frame(detection_container, bg='#161b22')
-        details_frame.pack(fill=tk.X)
-        
-        # Create 2x2 grid for metrics
-        for i in range(2):
-            details_frame.grid_columnconfigure(i, weight=1)
-        
-        # Emotion
-        emotion_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
-        emotion_container.grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-        tk.Label(emotion_container, text="Emotion", font=('Arial', 8, 'bold'), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.emotion_var = tk.StringVar(value="Neutral")
-        tk.Label(emotion_container, textvariable=self.emotion_var, font=('Arial', 11, 'bold'), 
-                bg='#21262d', fg='#3fb950').pack(pady=(0, 5))
-        
-        # Liveness
-        liveness_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
-        liveness_container.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        tk.Label(liveness_container, text="Liveness", font=('Arial', 8, 'bold'), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.liveness_var = tk.StringVar(value="Unknown")
-        self.liveness_label = tk.Label(liveness_container, textvariable=self.liveness_var, 
-                                      font=('Arial', 11, 'bold'), bg='#21262d', fg='#58a6ff')
-        self.liveness_label.pack(pady=(0, 0))
-        # Liveness confidence percentage
-        self.liveness_confidence_var = tk.StringVar(value="")
-        tk.Label(liveness_container, textvariable=self.liveness_confidence_var, 
-                font=('Arial', 8), bg='#21262d', fg='#8b949e').pack(pady=(0, 5))
-        
-        # Distance
-        distance_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
-        distance_container.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
-        tk.Label(distance_container, text="Distance", font=('Arial', 8, 'bold'), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.distance_var = tk.StringVar(value="N/A")
-        tk.Label(distance_container, textvariable=self.distance_var, font=('Arial', 11, 'bold'), 
-                bg='#21262d', fg='#a371f7').pack(pady=(0, 5))
-        
-        # Confidence
-        confidence_container = tk.Frame(details_frame, bg='#21262d', relief='solid', borderwidth=1)
-        confidence_container.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
-        self.confidence_var = tk.StringVar(value="N/A")
+        self.register_button = ttk.Button(button_container, text="REGISTER NEW USER", 
+                                         command=self.start_registration, state=tk.DISABLED, style='Success.TButton', width=20)
+        self.register_button.pack(side=tk.LEFT, padx=10)
 
-        # xAI Explainability Controls
-        xai_frame = ttk.LabelFrame(middle_panel, text="EXPLAINABILITY (xAI)")
-        xai_frame.pack(fill=tk.X, pady=(0, 10))
+        # 3. Hidden components (to prevent logic errors in existing update methods)
+        # These are created but NOT packed into the visible UI
+        self._setup_hidden_components()
+
+    def _setup_hidden_components(self):
+        """Initialize UI components that are referenced in logic but hidden in this view"""
+        hidden_frame = tk.Frame(self.window) # Not packed
         
-        xai_container = tk.Frame(xai_frame, bg='#161b22')
-        xai_container.pack(fill=tk.X, padx=10, pady=10)
+        # Status
+        self.status_text = tk.StringVar(value="")
+        self.status_label = ttk.Label(hidden_frame, textvariable=self.status_text)
+        self.status_indicator = tk.Label(hidden_frame)
+        self.accuracy_display = tk.Label(hidden_frame)
         
-        ttk.Button(xai_container, text="Show Attention Map", 
-                  command=self.show_attention_map, style='XAI.TButton').pack(fill=tk.X, pady=(0, 5))
+        # Detection Info
+        self.identity_label = tk.Label(hidden_frame)
+        self.emotion_var = tk.StringVar()
+        self.liveness_var = tk.StringVar()
+        self.liveness_label = tk.Label(hidden_frame)
+        self.liveness_confidence_var = tk.StringVar()
+        self.distance_var = tk.StringVar()
+        self.confidence_var = tk.StringVar()
         
-        # Debug panel (compact)
-        debug_frame = ttk.LabelFrame(middle_panel, text="VERIFICATION DEBUG")
-        debug_frame.pack(fill=tk.X, pady=(0, 10))
+        # Debug
+        self.pose_var = tk.StringVar()
+        self.threshold_display = tk.Label(hidden_frame)
         
-        debug_container = tk.Frame(debug_frame, bg='#161b22')
-        debug_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Matched pose
-        tk.Label(debug_container, text="Matched Pose:", font=('Arial', 9), 
-                bg='#161b22', fg='#8b949e').pack(anchor=tk.W)
-        self.pose_var = tk.StringVar(value="N/A")
-        tk.Label(debug_container, textvariable=self.pose_var, font=('Arial', 10, 'bold'), 
-                bg='#161b22', fg='#58a6ff').pack(anchor=tk.W, pady=(0, 8))
-        
-        # Threshold display
-        self.threshold_display = tk.Label(debug_container, 
-                                         text=f"Threshold: {OPTIMAL_THRESHOLD_GUI:.3f}", 
-                                         font=('Arial', 9), bg='#161b22', fg='#8b949e')
-        self.threshold_display.pack(anchor=tk.W)
-        
-        # Right panel (employee management + stats)
-        right_panel = tk.Frame(content_frame, bg='#0d1117', width=340)
-        right_panel.pack(side=tk.RIGHT, fill=tk.Y)
-        right_panel.pack_propagate(False)
-        
-        # Employee management
-        employee_frame = ttk.LabelFrame(right_panel, text="EMPLOYEE MANAGEMENT")
-        employee_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        emp_container = tk.Frame(employee_frame, bg='#161b22')
-        emp_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(emp_container, text="View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="Adjust Threshold", command=self.adjust_threshold, style='Warning.TButton').pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(emp_container, text="Reset State Lock", command=self.reset_state_lock, style='Warning.TButton').pack(fill=tk.X)
-        
-        # Statistics with prominent metrics
-        stats_frame = ttk.LabelFrame(right_panel, text="SESSION STATISTICS")
-        stats_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        stats_container = tk.Frame(stats_frame, bg='#161b22')
-        stats_container.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Metric boxes for key stats
-        metrics_grid = tk.Frame(stats_container, bg='#161b22')
-        metrics_grid.pack(fill=tk.X)
-        
-        # Total detections
-        det_box = tk.Frame(metrics_grid, bg='#21262d', relief='solid', borderwidth=1)
-        det_box.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(det_box, text="Total Detections", font=('Arial', 8), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.total_det_label = tk.Label(det_box, text="0", font=('Arial', 16, 'bold'), 
-                                       bg='#21262d', fg='#58a6ff')
-        self.total_det_label.pack(pady=(0, 5))
-        
-        # Success rate
-        success_box = tk.Frame(metrics_grid, bg='#21262d', relief='solid', borderwidth=1)
-        success_box.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(success_box, text="Recognition Rate", font=('Arial', 8), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.success_rate_label = tk.Label(success_box, text="0.0%", font=('Arial', 16, 'bold'), 
-                                          bg='#21262d', fg='#3fb950')
-        self.success_rate_label.pack(pady=(0, 5))
-        
-        # Unique faces
-        unique_box = tk.Frame(metrics_grid, bg='#21262d', relief='solid', borderwidth=1)
-        unique_box.pack(fill=tk.X, pady=(0, 5))
-        tk.Label(unique_box, text="Unique Faces Today", font=('Arial', 8), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.unique_faces_label = tk.Label(unique_box, text="0", font=('Arial', 16, 'bold'), 
-                                          bg='#21262d', fg='#a371f7')
-        self.unique_faces_label.pack(pady=(0, 5))
-        
-        # Database size
-        db_box = tk.Frame(metrics_grid, bg='#21262d', relief='solid', borderwidth=1)
-        db_box.pack(fill=tk.X)
-        tk.Label(db_box, text="Employees in DB", font=('Arial', 8), 
-                bg='#21262d', fg='#8b949e').pack(pady=(5, 0))
-        self.db_size_label = tk.Label(db_box, text=str(len(employee_db)), font=('Arial', 16, 'bold'), 
-                                      bg='#21262d', fg='#d29922')
-        self.db_size_label.pack(pady=(0, 5))
-    
-        
-        # Configure grid weights for responsive design
-        self.window.grid_rowconfigure(0, weight=1)
-        self.window.grid_columnconfigure(0, weight=1)
+        # Stats
+        self.total_det_label = tk.Label(hidden_frame)
+        self.success_rate_label = tk.Label(hidden_frame)
+        self.unique_faces_label = tk.Label(hidden_frame)
+        self.db_size_label = tk.Label(hidden_frame)
     
     def toggle_fullscreen(self):
         """Toggle fullscreen mode"""
@@ -842,8 +696,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         # Reset confidence buffer when camera starts
         self.confidence_buffer = []
-        self.locked_state = None
-        self.state_locked = False
         self.no_face_frames = 0
         
         # Update UI indicators
@@ -1219,13 +1071,21 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             state['hold_frames'] = 0
                         else:
                             # Import quality check functions
-                            from utils import check_image_blur, check_image_lighting
+                            from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
                             
                             # Quick quality checks
                             blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=40)
                             brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
                             
-                            if blur_ok and lighting_ok:
+                            # Pose validation
+                            target_pose = state['poses_required'][state['step']]
+                            yaw, pitch, roll, _, _, _ = estimate_head_pose_angles(cropped_face)
+                            pose_ok, _, pose_feedback = validate_pose_for_target(yaw, pitch, target_pose, is_strict=False)
+                            
+                            # Debug: Show current angles
+                            print(f"[REGISTRATION] Target: {target_pose} | Yaw: {yaw:.1f} | Pitch: {pitch:.1f} | Match: {pose_ok}")
+                            
+                            if blur_ok and lighting_ok and pose_ok:
                                 state['hold_frames'] += 1
                                 remaining = 5 - state['hold_frames']
                                 
@@ -1265,6 +1125,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 elif not lighting_ok:
                                     cv2.putText(frame, "Poor lighting", (10, h - 40), 
                                                cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
+                                elif not pose_ok:
+                                    # Show pose feedback with current angles
+                                    cv2.putText(frame, f"Current: Yaw={yaw:.1f} Pitch={pitch:.1f}", (10, h - 70), 
+                                               cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                                    cv2.putText(frame, f"Adjust Pose: {pose_feedback}", (10, h - 40), 
+                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
                 else:
                     # Show persistent hold counter at bottom (lighter weight)
                     if state.get('hold_frames', 0) > 0:
@@ -1283,18 +1149,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             # Track if multiple faces detected
             self.multiple_faces_warning = len(faces) > 1
-            
-            # Handle no face detection - reset locked state after threshold
-            if len(faces) == 0:
-                self.no_face_frames += 1
-                if self.no_face_frames > self.NO_FACE_RESET_THRESHOLD:
-                    if self.state_locked:
-                        print("[State] No face detected for too long, resetting locked state")
-                        self.state_locked = False
-                        self.locked_state = None
-                        self.confidence_buffer = []
-            else:
-                self.no_face_frames = 0  # Reset counter when face detected
             
             # Select primary face if multiple faces with temporal stability
             frame_h, frame_w = h, w  # Save frame dimensions before loop overwrites them
@@ -1322,110 +1176,96 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 is_primary = (face_idx == primary_face_idx)
                 box_color = (128, 128, 128) if not is_primary else (0, 255, 0)
 
-                # Apply locked state values FIRST if state is locked
-                if is_primary and self.state_locked and self.locked_state and isinstance(self.locked_state, dict):
-                    try:
-                        self.last_identity = self.locked_state.get('identity', 'Not Registered')
-                        self.last_confidence = self.locked_state.get('confidence', 0.0)
-                        self.last_emotion = self.locked_state.get('emotion', 'Neutral')
-                        self.last_liveness = self.locked_state.get('liveness', 'Unknown')
-                        self.last_distance = self.locked_state.get('distance', float('inf'))
-                        self.matched_pose_index = self.locked_state.get('pose_idx', -1)
-                        box_color = (0, 255, 0) if self.last_identity != "Not Registered" else (0, 0, 255)
-                    except Exception as e:
-                        print(f"[WARNING] Error applying locked state: {e}")
-                        self.state_locked = False
-                        self.locked_state = None
-
                 # Skip verification during registration mode - always show as unregistered
                 if self.registration_mode:
                     if is_primary:
                         self.last_identity = "Registering..."
                         box_color = (255, 165, 0)  # Orange for registration
-                # Only process primary face for verification when NOT in registration mode AND not locked
-                elif is_primary and not self.state_locked and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
+                # Only process primary face for verification
+                elif is_primary and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
                     # ========== TIMING: Processing Frame ==========
                     process_start = time.time()
-                    print(f"\n[PROCESSING] Frame #{self.frame_count} - Starting verification pipeline...")
                     
                     crop_start = time.time()
                     cropped_face = crop_face_with_padding(frame, x, y, w, h)
                     crop_time = (time.time() - crop_start) * 1000
-                    print(f"  [TIMING] Face Crop: {crop_time:.2f}ms")
 
                     if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
                         resize_start = time.time()
                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
                         resize_time = (time.time() - resize_start) * 1000
-                        print(f"  [TIMING] Face Resize: {resize_time:.2f}ms")
 
-                        # Multi-method liveness detection + emotion analysis
-                        is_live = True  # Default to Real
+                        # Extract face landmarks for blink detection
+                        rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                        landmarks_results = face_mesh_detector.process(rgb_face)
+                        face_landmarks = None
+                        if landmarks_results and landmarks_results.multi_face_landmarks:
+                            face_landmarks = landmarks_results.multi_face_landmarks[0]
+
+                        # Emotion and liveness detection
+                        is_live = True
                         liveness_confidence = 0.0
-                        # Check emotion and liveness independently of PROCESS_EVERY_N_FRAMES
-                        # Skip emotion check if state is locked (identity already confirmed)
-                        should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0) and not self.state_locked
+                        should_check_emotion = (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)
                         
-                        # Run emotion analysis asynchronously to prevent blocking
-                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
-                        # if should_check_emotion and self.emotion_analysis_enabled and not self.emotion_thread_running:
-                        #     self.emotion_thread_running = True
-                        #     self.last_emotion_check_frame = self.frame_count
-                        #     
-                        #     # Copy face data for background thread
-                        #     rgb_face_copy = cv2.cvtColor(cropped_face.copy(), cv2.COLOR_BGR2RGB)
-                        #     
-                        #     def async_emotion_analysis():
-                        #         try:
-                        #             # ========== TIMING: Emotion & Liveness Analysis (ASYNC) ==========
-                        #             emotion_start = time.time()
-                        #             print(f"  [MODULE] Starting Emotion & Liveness Analysis (async)...")
-                        #             
-                        #             emo, is_live_result, liveness_conf, liveness_details = analyze_emotion_and_liveness(rgb_face_copy)
-                        #             
-                        #             emotion_time = (time.time() - emotion_start) * 1000
-                        #             print(f"  [TIMING] Emotion & Liveness (async): {emotion_time:.2f}ms")
-                        #             
-                        #             # Update results (thread-safe - these are simple assignments)
-                        #             self.last_emotion = emo
-                        #             self.last_liveness = 'Real' if is_live_result else 'Spoof'
-                        #             self.last_liveness_confidence = liveness_conf
-                        #             self.emotion_failure_count = 0
-                        #             
-                        #             print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
-                        #                   f"({liveness_conf:.1%} confidence)")
-                        #             if not is_live_result:
-                        #                 print(f"  [Liveness Details] {liveness_details}")
-                        #         except Exception as e:
-                        #             self.emotion_failure_count += 1
-                        #             print(f"[WARNING] Emotion/liveness analysis error ({self.emotion_failure_count}/10): {e}")
-                        #             
-                        #             if self.emotion_failure_count >= 10:
-                        #                 self.emotion_analysis_enabled = False
-                        #                 print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
-                        #         finally:
-                        #             self.emotion_thread_running = False
-                        #     
-                        #     # Spawn background thread
-                        #     threading.Thread(target=async_emotion_analysis, daemon=True).start()
-                        #     print(f"  [ASYNC] Emotion analysis running in background thread...")
+                        # Run emotion analysis asynchronously
+                        if should_check_emotion and self.emotion_analysis_enabled and not self.emotion_thread_running:
+                            self.emotion_thread_running = True
+                            self.last_emotion_check_frame = self.frame_count
+                            
+                            # Copy face data for background thread
+                            rgb_face_copy = rgb_face.copy()
+                            landmarks_copy = face_landmarks
+                            
+                            def async_emotion_analysis():
+                                try:
+                                    # Emotion & Liveness Analysis (ASYNC with Blink Detection)
+                                    emotion_start = time.time()
+                                    print(f"  [MODULE] Starting Emotion & Liveness Analysis with Blink Detection...")
+                                    
+                                    emo, is_live_result, liveness_conf, liveness_details = analyze_emotion_and_liveness(
+                                        rgb_face_copy, landmarks_copy
+                                    )
+                                    
+                                    emotion_time = (time.time() - emotion_start) * 1000
+                                    print(f"  [TIMING] Emotion & Liveness: {emotion_time:.2f}ms")
+                                    
+                                    # Update results (thread-safe)
+                                    self.last_emotion = emo
+                                    self.last_liveness = 'Real' if is_live_result else 'Spoof'
+                                    self.last_liveness_confidence = liveness_conf
+                                    self.emotion_failure_count = 0
+                                    
+                                    print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
+                                          f"({liveness_conf:.1%} confidence)")
+                                    if not is_live_result:
+                                        blink_info = liveness_details.get('blink', {})
+                                        print(f"  [Liveness] Blink: {blink_info.get('has_blinked', False)} | "
+                                              f"Total Blinks: {blink_info.get('total_blinks', 0)}")
+                                except Exception as e:
+                                    self.emotion_failure_count += 1
+                                    print(f"[WARNING] Emotion/liveness error ({self.emotion_failure_count}/10): {e}")
+                                    
+                                    if self.emotion_failure_count >= 10:
+                                        self.emotion_analysis_enabled = False
+                                        print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
+                                finally:
+                                    self.emotion_thread_running = False
+                            
+                            # Spawn background thread
+                            threading.Thread(target=async_emotion_analysis, daemon=True).start()
                         
-                        # Use last liveness result (updated asynchronously)
-                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
-                        # is_live = (self.last_liveness == 'Real')
-                        is_live = True  # Bypass liveness check - treat all faces as real
+                        # Use last liveness result
+                        is_live = (self.last_liveness == 'Real')
 
-                        # TEMPORARILY DISABLED: Spoofing/Liveness Detection
-                        # if not is_live:
-                        #     self.last_identity = "Spoof Detected"
-                        #     box_color = (0, 0, 255)
-                        # else:
-                        if True:  # Bypass liveness check
+                        # Check for spoof
+                        if not is_live:
+                            self.last_identity = "Spoof Detected"
+                            box_color = (0, 0, 255)
+                        else:
                             # Verification with multi-embedding support
                             try:
                                     # ========== TIMING: Face Verification ==========
                                     verification_start = time.time()
-                                    print(f"  [MODULE] Starting Face Verification...")
                                     
                                     # Avoid disk I/O: convert cv2 image to PIL directly
                                     preprocess_start = time.time()
@@ -1433,13 +1273,11 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     pil_image = Image.fromarray(rgb).convert('RGB')
                                     image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
                                     preprocess_time = (time.time() - preprocess_start) * 1000
-                                    print(f"    [TIMING] Preprocessing: {preprocess_time:.2f}ms")
 
                                     embedding_start = time.time()
                                     with torch.no_grad():
                                         trial_embedding = verification_model(image_tensor, mode='metric').cpu()
                                     embedding_time = (time.time() - embedding_start) * 1000
-                                    print(f"    [TIMING] Embedding Generation: {embedding_time:.2f}ms")
 
                                     min_distance = float('inf')
                                     self.last_identity = "Not Registered"
@@ -1448,7 +1286,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Multi-embedding comparison
                                     comparison_start = time.time()
                                     best_match_data = None  # Track the employee data for pose matching
-                                    print(f"    [MODULE] Comparing with {len(employee_db)} employees...")
                                     for name, saved_data in employee_db.items():
                                         if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
                                             # Compare against all stored embeddings, use minimum distance
@@ -1466,7 +1303,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             best_match_data = saved_data  # Store for pose matching
 
                                     comparison_time = (time.time() - comparison_start) * 1000
-                                    print(f"    [TIMING] Database Comparison: {comparison_time:.2f}ms")
                                     
                                     # Load current threshold (may have been adjusted by user)
                                     current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
@@ -1480,136 +1316,99 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Determine identity for this frame
                                     frame_identity = best_match if min_distance < current_threshold else "Not Registered"
                                     
-                                    # Add result to confidence buffer (if not locked yet)
-                                    buffer_start = time.time()
-                                    if not self.state_locked:
-                                        current_time = time.time()
-                                        self.confidence_buffer.append((
-                                            current_time,
-                                            frame_identity,
-                                            confidence,
-                                            self.last_emotion,
-                                            self.last_liveness,
-                                            min_distance,
-                                            -1  # pose_idx will be set below if applicable
-                                        ))
-                                        
-                                        # Check if we have enough samples to lock
-                                        if len(self.confidence_buffer) >= 20:  # At least 20 samples collected
-                                            # Check if enough time has passed since first sample
-                                            oldest_time = min(entry[0] for entry in self.confidence_buffer)
-                                            time_elapsed = current_time - oldest_time
-                                            
-                                            # Lock after collecting samples for at least 5 seconds
-                                            if time_elapsed >= 5.0:
-                                                try:
-                                                    # Use voting-based approach: pick identity that appears most frequently
-                                                    # Group by identity and count occurrences with confidence weighting
-                                                    identity_votes = {}
-                                                    identity_data = {}  # Store best sample for each identity
-                                                    
-                                                    for entry in self.confidence_buffer:
-                                                        if not entry or len(entry) < 7:
-                                                            continue  # Skip malformed entries
-                                                        identity = entry[1]
-                                                        confidence = entry[2]
-                                                        
-                                                        # Count votes (frequency)
-                                                        if identity not in identity_votes:
-                                                            identity_votes[identity] = 0
-                                                            identity_data[identity] = []
-                                                        
-                                                        identity_votes[identity] += 1
-                                                        identity_data[identity].append(entry)
-                                                    
-                                                    # Ensure we have valid data
-                                                    if not identity_votes:
-                                                        print("[WARNING] No valid votes in buffer, skipping lock")
-                                                        self.confidence_buffer = []
-                                                        continue
-                                                    
-                                                    # Pick identity with most votes
-                                                    most_common_identity = max(identity_votes, key=identity_votes.get)
-                                                    vote_count = identity_votes[most_common_identity]
-                                                    
-                                                    # From that identity, pick the sample with highest confidence
-                                                    best_entry = max(identity_data[most_common_identity], key=lambda x: x[2])
-                                                    
-                                                    self.locked_state = {
-                                                        'identity': str(best_entry[1]),
-                                                        'confidence': float(best_entry[2]),
-                                                        'emotion': str(best_entry[3]),
-                                                        'liveness': str(best_entry[4]),
-                                                        'distance': float(best_entry[5]),
-                                                        'pose_idx': int(best_entry[6]),
-                                                        'locked_at': current_time
-                                                    }
-                                                    self.state_locked = True
-                                                    print(f"[State] Locked: {self.locked_state['identity']} (votes: {vote_count}/{len(self.confidence_buffer)}, confidence: {self.locked_state['confidence']:.1f}%)")
-                                                    
-                                                    # Clear buffer after locking
-                                                    self.confidence_buffer = []
-                                                except Exception as e:
-                                                    print(f"[ERROR] Failed to lock state: {e}")
-                                                    self.confidence_buffer = []
-                                            else:
-                                                # Still accumulating - show progress
-                                                print(f"[State] Accumulating: {len(self.confidence_buffer)} samples over {time_elapsed:.1f}s (need 5s)")
+                                    # ========== IDENTITY LOCK SYSTEM FOR SEAMLESS CHECK-IN ==========
+                                    current_time = time.time()
                                     
-                                    # Use locked state if available, otherwise use current frame result
-                                    if self.state_locked and self.locked_state and isinstance(self.locked_state, dict):
-                                        try:
-                                            self.last_identity = self.locked_state.get('identity', 'Not Registered')
-                                            self.last_confidence = self.locked_state.get('confidence', 0.0)
-                                            self.last_emotion = self.locked_state.get('emotion', 'Neutral')
-                                            self.last_liveness = self.locked_state.get('liveness', 'Unknown')
-                                            self.last_distance = self.locked_state.get('distance', float('inf'))
-                                            self.matched_pose_index = self.locked_state.get('pose_idx', -1)
-                                            box_color = (0, 255, 0) if self.last_identity != "Not Registered" else (0, 0, 255)
-                                        except Exception as e:
-                                            print(f"[WARNING] Error reading locked state: {e}")
-                                            self.state_locked = False
-                                            self.locked_state = None
-                                            # Fall back to current frame
-                                            self.last_identity = frame_identity
-                                            self.last_confidence = confidence
-                                            self.last_distance = min_distance
-                                            box_color = (0, 255, 0) if frame_identity != "Not Registered" else (0, 0, 255)
-                                    else:
-                                        # Use current frame result (accumulation phase)
-                                        self.last_identity = frame_identity
-                                        self.last_confidence = confidence
-                                        self.last_distance = min_distance
-                                        box_color = (0, 255, 0) if frame_identity != "Not Registered" else (0, 0, 255)
-                                        
-                                        # Debug output during accumulation
-                                        if self.frame_count % 30 == 0:
-                                            buffer_size = len(self.confidence_buffer)
-                                            if buffer_size > 0:
-                                                print(f"[State] Accumulating: {buffer_size} samples, Identity: {frame_identity}, Confidence: {confidence:.1f}%")
-                                    
-                                    # Trigger animations only when not locked
-                                    if not self.state_locked:
-                                        if min_distance < current_threshold:
-                                            if not self.verification_animation['active']:
-                                                self.verification_animation = {
-                                                    'active': True,
-                                                    'type': 'success',
-                                                    'frame_count': 0,
-                                                    'max_frames': 30
-                                                }
+                                    # Check if we have a locked identity
+                                    if self.locked_identity is not None:
+                                        # Check if lock display time has expired
+                                        if current_time - self.lock_timestamp > self.LOCK_DISPLAY_TIME:
+                                            print(f"[LOCK] Auto-resetting after {self.LOCK_DISPLAY_TIME}s display")
+                                            self.locked_identity = None
+                                            self.identity_lock_buffer = []
+                                            self.last_identity = "Not Registered"
+                                            # Reset liveness detector for next verification
+                                            reset_liveness_detector()
                                         else:
-                                            if not self.verification_animation['active']:
-                                                self.verification_animation = {
-                                                    'active': True,
-                                                    'type': 'failure',
-                                                    'frame_count': 0,
-                                                    'max_frames': 30
-                                                }
+                                            # Keep showing locked identity
+                                            self.last_identity = self.locked_identity
+                                            box_color = (0, 255, 0)
+                                    else:
+                                        # No locked identity - accumulate verifications
+                                        if frame_identity != "Not Registered":
+                                            # Add to buffer
+                                            self.identity_lock_buffer.append((current_time, frame_identity, confidence))
+                                            
+                                            # Remove old entries (older than LOCK_DURATION)
+                                            self.identity_lock_buffer = [
+                                                (t, name, conf) for t, name, conf in self.identity_lock_buffer
+                                                if current_time - t <= self.LOCK_DURATION
+                                            ]
+                                            
+                                            # Count verifications per identity
+                                            identity_counts = {}
+                                            for _, name, conf in self.identity_lock_buffer:
+                                                if name not in identity_counts:
+                                                    identity_counts[name] = []
+                                                identity_counts[name].append(conf)
+                                            
+                                            # Find most verified identity
+                                            if identity_counts:
+                                                most_verified = max(identity_counts.items(), key=lambda x: len(x[1]))
+                                                most_verified_name = most_verified[0]
+                                                verification_count = len(most_verified[1])
+                                                avg_confidence = sum(most_verified[1]) / len(most_verified[1])
+                                                
+                                                # Lock if we have enough verifications
+                                                if verification_count >= self.LOCK_MIN_VERIFICATIONS:
+                                                    self.locked_identity = most_verified_name
+                                                    self.lock_timestamp = current_time
+                                                    self.last_identity = most_verified_name
+                                                    box_color = (0, 255, 0)
+                                                    
+                                                    print(f"[LOCK] Identity locked: {most_verified_name} ({verification_count} verifications, {avg_confidence:.1f}% avg confidence)")
+                                                    
+                                                    # Update UI Log immediately (on main thread to ensure it shows)
+                                                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                                                    log_entry = f"[{timestamp}] {most_verified_name}"
+                                                    self.log_listbox.insert(0, log_entry)
+                                                    print(f"✓ Added to check-in log: {log_entry}")
+                                                    
+                                                    # Mark attendance in background
+                                                    def mark_async():
+                                                        try:
+                                                            success, message = self.attendance_logger.mark_attendance(
+                                                                most_verified_name, min_distance, self.last_emotion, self.last_liveness
+                                                            )
+                                                            if success:
+                                                                print(f"✓ {message}")
+                                                        except Exception as e:
+                                                            print(f"Attendance marking error: {e}")
+                                                    
+                                                    threading.Thread(target=mark_async, daemon=True).start()
+                                                    self.last_attendance_message = f"Checked in: {most_verified_name}"
+                                                else:
+                                                    # Still accumulating - show progress
+                                                    buffer_age = current_time - min(t for t, _, _ in self.identity_lock_buffer)
+                                                    progress_pct = int((buffer_age / self.LOCK_DURATION) * 100)
+                                                    self.last_identity = f"{most_verified_name} (verifying... {verification_count}/{self.LOCK_MIN_VERIFICATIONS})"
+                                                    box_color = (255, 165, 0)  # Orange while verifying
+                                            else:
+                                                self.last_identity = "Not Registered"
+                                                box_color = (0, 0, 255)
+                                        else:
+                                            # No face recognized - clear buffer if it's been too long
+                                            if self.identity_lock_buffer:
+                                                oldest_time = min(t for t, _, _ in self.identity_lock_buffer)
+                                                if current_time - oldest_time > self.LOCK_DURATION:
+                                                    self.identity_lock_buffer = []
+                                            self.last_identity = "Not Registered"
+                                            box_color = (0, 0, 255)
                                     
-                                    buffer_time = (time.time() - buffer_start) * 1000
-                                    if buffer_time > 5:  # Only log if significant
-                                        print(f"    [TIMING] Confidence Buffer: {buffer_time:.2f}ms")
+                                    self.last_confidence = confidence
+                                    self.last_distance = min_distance
+                                    
+
                                     
                                     # xAI: Store face data for explainability features
                                     xai_start = time.time()
@@ -1645,37 +1444,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         _, self.matched_pose_index = min(distances_with_idx, key=lambda x: x[0])
                                     else:
                                         self.matched_pose_index = 0
-                                    
-                                    # Phase 8: Auto-mark attendance for recognized faces
-                                    attendance_start = time.time()
-                                    if self.last_identity != "Not Registered":
-                                        # Only attempt once per cooldown period to avoid repeated I/O
-                                        current_time = time.time()
-                                        last_attempt = self.attendance_attempt_cache.get(self.last_identity, 0)
-                                        
-                                        # Attempt marking only if it's been more than 5 seconds since last attempt
-                                        if current_time - last_attempt > 5:
-                                            self.attendance_attempt_cache[self.last_identity] = current_time
-                                            print(f"    [MODULE] Triggering async attendance marking...")
-                                            
-                                            # Run attendance marking in background thread to avoid blocking GUI
-                                            def mark_async():
-                                                try:
-                                                    success, message = self.attendance_logger.mark_attendance(
-                                                        self.last_identity, min_distance, self.last_emotion, self.last_liveness
-                                                    )
-                                                    self.last_attendance_message = message
-                                                    if success:
-                                                        print(f"✓ {message}")
-                                                    else:
-                                                        print(f"ℹ {message}")
-                                                except Exception as e:
-                                                    print(f"Attendance marking error: {e}")
-                                            
-                                            threading.Thread(target=mark_async, daemon=True).start()
-                                    attendance_time = (time.time() - attendance_start) * 1000
-                                    if attendance_time > 1:
-                                        print(f"    [TIMING] Attendance Check: {attendance_time:.2f}ms")
                                     
                                     # ========== TOTAL TIMING ==========
                                     total_process_time = (time.time() - process_start) * 1000
@@ -1747,25 +1515,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 h, w = frame.shape[:2]
                 font_status = cv2.FONT_HERSHEY_DUPLEX
                 
-                if self.state_locked:
-                    # Show locked state indicator with lock icon
-                    status_text = "LOCKED"
-                    status_color = (46, 204, 113)  # Green
-                    (tw, th), _ = cv2.getTextSize(status_text, font_status, 0.6, 2)
-                    
-                    # Draw indicator in top-right corner
-                    x_pos = w - tw - 40
-                    y_pos = 10
-                    
-                    overlay = frame.copy()
-                    draw_rounded_rectangle(overlay, (x_pos - 10, y_pos), 
-                                         (x_pos + tw + 20, y_pos + th + 16), 
-                                         status_color, -1, radius=10)
-                    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
-                    cv2.putText(frame, status_text, (x_pos + 5, y_pos + th + 5), 
-                               font_status, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-                    
-                elif len(self.confidence_buffer) > 0:
+                if len(self.confidence_buffer) > 0:
                     # Show accumulation progress
                     buffer_size = len(self.confidence_buffer)
                     progress_pct = min(100, int((buffer_size / 20) * 100))
@@ -1877,13 +1627,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         """Update the detection information display"""
         if self.last_identity != "Not Registered" and self.last_identity != "Error":
             # Successful recognition
-            lock_indicator = " 🔒" if self.state_locked else ""
-            self.identity_label.config(text=f"✅ {self.last_identity}{lock_indicator}", 
+            self.identity_label.config(text=f"✅ {self.last_identity}", 
                                      bg='#d5f4e6', fg='#27ae60')
-            if self.state_locked:
-                status_text = f"Locked: {self.last_identity}"
-            else:
-                status_text = f"🟢 Recognition successful: {self.last_identity}"
+            status_text = f"🟢 Recognition successful: {self.last_identity}"
         elif self.last_identity == "Error":
             # Error state
             self.identity_label.config(text="❌ Recognition Error", 
@@ -2058,23 +1804,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             listbox.insert(tk.END, f"{i:2d}. {name}")
         
         # Close button
-        ttk.Button(content, text="Close", command=dialog.destroy).pack(pady=(10, 0))
+        ttk.Button(content, text="Close", command=self.view_employees).pack(pady=(10, 0))
     
-    def reset_state_lock(self):
-        """Reset the locked state to allow re-accumulation"""
-        if self.state_locked:
-            self.state_locked = False
-            self.locked_state = None
-            self.confidence_buffer = []
-            messagebox.showinfo("State Unlocked", 
-                              "Recognition state has been reset.\n\n"
-                              "The system will now re-accumulate verification data\n"
-                              "for the next 7 seconds before locking again.")
-            print("[State] Manually reset by user")
-        else:
-            messagebox.showinfo("State Not Locked", 
-                              "The recognition state is currently not locked.\n\n"
-                              "The system is already accumulating data.")
+
     
     def edit_employee(self):
         """Batch edit employees with checkboxes"""
@@ -2269,7 +2001,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             text_widget.config(state=tk.DISABLED)
         
-        update_display()
+        update_display();
         
         # Summary
         summary_frame = tk.Frame(content, bg='#e8f5e8', relief='solid', borderwidth=1)
@@ -2547,7 +2279,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             return
         
         try:
-            neighbor_names, neighbor_distances = self.knn_neighbors
+            neighbor_names, neighbor_distances = self.knn_neighbors;
             
             # Create analysis window
             win = tk.Toplevel(self.window)

@@ -7,16 +7,18 @@ import cv2
 import numpy as np
 from collections import deque
 import time
+from .blink_detector import BlinkDetector
 
 
 class LivenessDetector:
     """
     Multi-method liveness detector combining:
-    1. Texture analysis (LBP-based)
-    2. Motion detection (optical flow)
-    3. Blinking detection
+    1. Eye blink detection (PRIMARY - anti-spoofing)
+    2. Texture analysis (LBP-based)
+    3. Motion detection (optical flow)
     4. Moiré pattern detection
     5. Color distribution analysis
+    6. Edge/reflection detection
     """
     
     def __init__(self, motion_history_size=5, blink_threshold=0.21):
@@ -32,20 +34,20 @@ class LivenessDetector:
         
         # History buffers
         self.frame_history = deque(maxlen=motion_history_size)
-        self.blink_history = deque(maxlen=30)  # Track blinks over 1 second at 30fps
-        self.last_blink_time = 0
         
-        # Detection state
-        self.eye_closed_frames = 0
-        self.blink_count = 0
+        # Initialize blink detector
+        self.blink_detector = BlinkDetector(ear_threshold=blink_threshold)
+        
+        # Verification tracking
+        self.verification_start_time = None
         
     def analyze(self, face_image, landmarks=None):
         """
-        Perform comprehensive liveness analysis
+        Perform comprehensive liveness analysis with eye blink detection
         
         Args:
             face_image: RGB face crop (numpy array)
-            landmarks: Optional facial landmarks from MediaPipe
+            landmarks: MediaPipe Face Mesh landmarks (required for blink detection)
             
         Returns:
             is_live: bool - True if face appears to be real
@@ -55,53 +57,105 @@ class LivenessDetector:
         if face_image is None or face_image.size == 0:
             return False, 0.0, {}
         
+        # Initialize verification timer if not started
+        if self.verification_start_time is None:
+            self.verification_start_time = time.time()
+        
+        current_time = time.time()
         details = {}
         scores = []
         weights = []
         
-        # 1. Texture Analysis (LBP-based)
+        # 1. EYE BLINK DETECTION (PRIMARY - 40% weight)
+        blink_score = 0.0
+        if landmarks is not None:
+            try:
+                blink_detected, current_ear, total_blinks = self.blink_detector.detect_blink(landmarks)
+                
+                # Check if blink requirement met during verification period
+                has_blinked, blinks_needed = self.blink_detector.requires_blink(
+                    self.verification_start_time, 
+                    current_time, 
+                    min_blinks=1
+                )
+                
+                # Score based on blink presence
+                if has_blinked:
+                    blink_score = 1.0  # Strong positive signal
+                elif total_blinks > 0:
+                    blink_score = 0.7  # Some blinks detected (good sign)
+                else:
+                    # No blinks yet - check if enough time has passed
+                    elapsed = current_time - self.verification_start_time
+                    if elapsed < 2.0:
+                        blink_score = 0.5  # Neutral - still waiting
+                    else:
+                        blink_score = 0.0  # Suspicious - no blinks after 2 seconds
+                
+                details['blink'] = {
+                    'score': blink_score,
+                    'has_blinked': has_blinked,
+                    'total_blinks': total_blinks,
+                    'current_ear': current_ear,
+                    'blinks_needed': blinks_needed
+                }
+                
+                scores.append(blink_score)
+                weights.append(0.40)  # PRIMARY indicator
+                
+            except Exception as e:
+                details['blink'] = {'error': str(e), 'score': 0.5}
+                scores.append(0.5)
+                weights.append(0.40)
+        else:
+            # No landmarks - cannot do blink detection (penalize)
+            details['blink'] = {'error': 'No landmarks provided', 'score': 0.3}
+            scores.append(0.3)
+            weights.append(0.40)
+        
+        # 2. Texture Analysis (LBP-based)
         texture_score = self._analyze_texture(face_image)
         details['texture'] = texture_score
         scores.append(texture_score)
-        weights.append(0.20)  # Moderate - good indicator but ID cards score high
+        weights.append(0.15)  # Reduced weight
         
-        # 2. Color Distribution Analysis
+        # 3. Color Distribution Analysis
         color_score = self._analyze_color_distribution(face_image)
         details['color'] = color_score
         scores.append(color_score)
-        weights.append(0.20)  # Moderate - good indicator but printed colors accurate
+        weights.append(0.10)  # Reduced weight
         
-        # 3. Moiré Pattern Detection
+        # 4. Moiré Pattern Detection
         moire_score = self._detect_moire_patterns(face_image)
         details['moire'] = moire_score
         scores.append(moire_score)
-        weights.append(0.15)  # Good for screens, neutral for ID cards
+        weights.append(0.10)  # Reduced weight
         
-        # 4. Motion Analysis (if sufficient history)
+        # 5. Motion Analysis (if sufficient history)
         if len(self.frame_history) >= 3:
             motion_score = self._analyze_motion(face_image)
             details['motion'] = motion_score
             scores.append(motion_score)
-            weights.append(0.20)  # Important - distinguishes static from moving
+            weights.append(0.10)  # Reduced weight
         
-        # 5. Edge Detection (NEW - detects phone/card rectangular edges)
+        # 6. Edge Detection
         edge_score = self._detect_screen_edges(face_image)
         details['edge_detection'] = edge_score
         scores.append(edge_score)
-        weights.append(0.08)  # Supplementary
+        weights.append(0.05)
         
-        # 6. Reflection Detection (NEW - screens have specular reflections)
+        # 7. Reflection Detection
         reflection_score = self._detect_screen_reflections(face_image)
         details['reflection'] = reflection_score
         scores.append(reflection_score)
-        weights.append(0.07)  # Supplementary
+        weights.append(0.05)
         
-        # 7. Temporal Consistency (NEW - screens have refresh patterns)
+        # 8. Temporal Consistency
         if len(self.frame_history) >= 3:
             temporal_score = self._analyze_temporal_consistency(face_image)
             details['temporal'] = temporal_score
             scores.append(temporal_score)
-            weights.append(0.20)  # Important - works with motion to catch static images
+            weights.append(0.05)
         
         # Store frame for motion tracking
         gray = cv2.cvtColor(face_image, cv2.COLOR_RGB2GRAY)
@@ -112,15 +166,23 @@ class LivenessDetector:
         weights = weights / weights.sum()  # Normalize
         confidence = np.average(scores, weights=weights)
         
-        # Threshold: 60% with gradual motion/temporal scoring
-        # Real faces (still): 60-68% → Pass (gradual motion scoring helps)
-        # ID cards: 45-58% → Reject (very low motion + temporal)
-        is_live = confidence >= 0.61
+        # Decision threshold: 65% (stricter with blink detection)
+        # Real faces with blinks: 75-85%
+        # Real faces without blinks yet: 55-65% (waiting period)
+        # Photos/screens (no blinks): 30-50%
+        is_live = confidence >= 0.65
         
         details['overall'] = confidence
         details['decision'] = 'Real' if is_live else 'Spoof'
+        details['elapsed_time'] = current_time - self.verification_start_time
         
         return is_live, confidence, details
+    
+    def reset(self):
+        """Reset detector state for new verification"""
+        self.frame_history.clear()
+        self.blink_detector.reset()
+        self.verification_start_time = None
     
     def _analyze_texture(self, face_image):
         """
