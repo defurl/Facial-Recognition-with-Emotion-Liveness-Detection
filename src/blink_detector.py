@@ -62,6 +62,7 @@ class BlinkDetector:
         # History tracking
         self.ear_history = deque(maxlen=history_size)
         self.timestamp_history = deque(maxlen=history_size)
+        self.blink_timestamps = []  # Track actual blink event times
         
         # Blink tracking
         self.blink_count = 0
@@ -192,6 +193,7 @@ class BlinkDetector:
                     # Valid blink detected!
                     self.blink_count += 1
                     self.last_blink_time = timestamp
+                    self.blink_timestamps.append(timestamp)  # Record blink event
                     blink_detected = True
                 
                 # Reset state
@@ -232,6 +234,7 @@ class BlinkDetector:
         """Reset detector state"""
         self.ear_history.clear()
         self.timestamp_history.clear()
+        self.blink_timestamps.clear()  # Clear blink events
         self.blink_count = 0
         self.last_blink_time = 0
         self.eye_closed_start = None
@@ -250,9 +253,9 @@ class BlinkDetector:
         Returns:
             tuple: (has_blinked: bool, blinks_needed: int)
         """
-        # Count blinks since verification started
+        # Count ACTUAL BLINK EVENTS since verification started
         blinks_in_period = sum(
-            1 for ts in self.timestamp_history 
+            1 for ts in self.blink_timestamps 
             if ts >= verification_start_time
         )
         

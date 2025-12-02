@@ -27,7 +27,10 @@ def _get_liveness_detector():
     
     if _liveness_detector is None:
         print("[Liveness] Initializing multi-method liveness detector with eye blink detection")
-        from .liveness import LivenessDetector
+        try:
+            from .liveness import LivenessDetector
+        except ImportError:
+            from liveness import LivenessDetector
         _liveness_detector = LivenessDetector()
     
     return _liveness_detector

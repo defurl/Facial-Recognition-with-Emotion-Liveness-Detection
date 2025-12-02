@@ -7,7 +7,12 @@ import cv2
 import numpy as np
 from collections import deque
 import time
-from .blink_detector import BlinkDetector
+
+# Import blink detector (handle both relative and absolute imports)
+try:
+    from .blink_detector import BlinkDetector
+except ImportError:
+    from blink_detector import BlinkDetector
 
 
 class LivenessDetector:
@@ -34,6 +39,7 @@ class LivenessDetector:
         
         # History buffers
         self.frame_history = deque(maxlen=motion_history_size)
+        self.landmark_history = deque(maxlen=10)  # Track last 10 landmark positions
         
         # Initialize blink detector
         self.blink_detector = BlinkDetector(ear_threshold=blink_threshold)
@@ -80,28 +86,33 @@ class LivenessDetector:
                 )
                 
                 # Score based on blink presence
+                elapsed = current_time - self.verification_start_time
                 if has_blinked:
                     blink_score = 1.0  # Strong positive signal
+                    print(f"  [BLINK] ✓ Blink detected! Total: {total_blinks}, EAR: {current_ear:.3f}")
                 elif total_blinks > 0:
                     blink_score = 0.7  # Some blinks detected (good sign)
+                    print(f"  [BLINK] Partial blinks: {total_blinks}, EAR: {current_ear:.3f}")
                 else:
                     # No blinks yet - check if enough time has passed
-                    elapsed = current_time - self.verification_start_time
-                    if elapsed < 2.0:
+                    if elapsed < 2.5:
                         blink_score = 0.5  # Neutral - still waiting
+                        print(f"  [BLINK] Waiting for blink... ({elapsed:.1f}s / 2.5s)")
                     else:
-                        blink_score = 0.0  # Suspicious - no blinks after 2 seconds
+                        blink_score = 0.0  # SUSPICIOUS - no blinks after 2.5 seconds
+                        print(f"  [BLINK] ⚠️ NO BLINKS DETECTED after {elapsed:.1f}s - LIKELY SPOOF!")
                 
                 details['blink'] = {
                     'score': blink_score,
                     'has_blinked': has_blinked,
                     'total_blinks': total_blinks,
                     'current_ear': current_ear,
-                    'blinks_needed': blinks_needed
+                    'blinks_needed': blinks_needed,
+                    'elapsed_time': elapsed
                 }
                 
                 scores.append(blink_score)
-                weights.append(0.40)  # PRIMARY indicator
+                weights.append(0.35)  # PRIMARY indicator - balanced at 35%
                 
             except Exception as e:
                 details['blink'] = {'error': str(e), 'score': 0.5}
@@ -131,31 +142,39 @@ class LivenessDetector:
         scores.append(moire_score)
         weights.append(0.10)  # Reduced weight
         
-        # 5. Motion Analysis (if sufficient history)
+        # 5. Facial Landmark Motion Analysis (detects expression changes vs rigid movement)
+        landmark_motion_score = 0.5  # Default neutral
+        if landmarks is not None:
+            landmark_motion_score = self._analyze_landmark_motion(landmarks)
+            details['landmark_motion'] = landmark_motion_score
+            scores.append(landmark_motion_score)
+            weights.append(0.10)
+        
+        # 6. Frame Motion Analysis (if sufficient history) - reduced weight
         if len(self.frame_history) >= 3:
             motion_score = self._analyze_motion(face_image)
             details['motion'] = motion_score
             scores.append(motion_score)
-            weights.append(0.10)  # Reduced weight
+            weights.append(0.05)  # Reduced - can be fooled by moving phone
         
-        # 6. Edge Detection
+        # 7. Edge Detection
         edge_score = self._detect_screen_edges(face_image)
         details['edge_detection'] = edge_score
         scores.append(edge_score)
-        weights.append(0.05)
+        weights.append(0.03)
         
-        # 7. Reflection Detection
+        # 8. Reflection Detection
         reflection_score = self._detect_screen_reflections(face_image)
         details['reflection'] = reflection_score
         scores.append(reflection_score)
-        weights.append(0.05)
+        weights.append(0.02)
         
-        # 8. Temporal Consistency
+        # 9. Temporal Consistency
         if len(self.frame_history) >= 3:
             temporal_score = self._analyze_temporal_consistency(face_image)
             details['temporal'] = temporal_score
             scores.append(temporal_score)
-            weights.append(0.05)
+            weights.append(0.03)
         
         # Store frame for motion tracking
         gray = cv2.cvtColor(face_image, cv2.COLOR_RGB2GRAY)
@@ -166,11 +185,17 @@ class LivenessDetector:
         weights = weights / weights.sum()  # Normalize
         confidence = np.average(scores, weights=weights)
         
-        # Decision threshold: 65% (stricter with blink detection)
-        # Real faces with blinks: 75-85%
-        # Real faces without blinks yet: 55-65% (waiting period)
-        # Photos/screens (no blinks): 30-50%
-        is_live = confidence >= 0.65
+        # Decision threshold: 55% (adjusted to reduce false positives on real faces)
+        # Real faces with blinks: 70-85%
+        # Real faces without blinks yet (waiting): 50-65%
+        # Photos/screens (no blinks): 25-50%
+        is_live = confidence >= 0.55
+        
+        # Log decision reasoning
+        if not is_live:
+            print(f"  [LIVENESS] ⚠️ SPOOF DETECTED: confidence={confidence:.1%} < threshold=55%")
+            if 'blink' in details:
+                print(f"              Blink score: {details['blink']['score']:.1%}, Has blinked: {details['blink']['has_blinked']}")
         
         details['overall'] = confidence
         details['decision'] = 'Real' if is_live else 'Spoof'
@@ -181,7 +206,9 @@ class LivenessDetector:
     def reset(self):
         """Reset detector state for new verification"""
         self.frame_history.clear()
-        self.blink_detector.reset()
+        self.landmark_history.clear()
+        if hasattr(self, 'blink_detector') and self.blink_detector:
+            self.blink_detector.reset()
         self.verification_start_time = None
     
     def _analyze_texture(self, face_image):
@@ -299,6 +326,91 @@ class LivenessDetector:
             return score
         except Exception as e:
             return 0.5
+    
+    def _analyze_landmark_motion(self, landmarks):
+        """
+        Analyze facial landmark motion to detect INTERNAL facial deformation.
+        Real faces: landmarks move independently (expressions, micro-movements)
+        Moving phone: ALL landmarks move rigidly together (no deformation)
+        
+        Returns:
+            score: float (0-1, higher = more likely real)
+        """
+        try:
+            # Extract key landmarks as numpy array
+            key_indices = [
+                33, 263,    # Eye corners
+                61, 291,    # Mouth corners
+                1,          # Nose tip
+                152,        # Chin
+                10, 338,    # Forehead points
+                199, 428    # Cheek points
+            ]
+            
+            current_landmarks = np.array([
+                [landmarks.landmark[i].x, landmarks.landmark[i].y]
+                for i in key_indices
+            ])
+            
+            # Store in history
+            self.landmark_history.append(current_landmarks)
+            
+            if len(self.landmark_history) < 3:
+                return 0.5  # Not enough history
+            
+            # Calculate relative movements between landmarks
+            prev_landmarks = self.landmark_history[-2]
+            
+            # Calculate displacement for each landmark
+            displacements = current_landmarks - prev_landmarks
+            displacement_magnitudes = np.linalg.norm(displacements, axis=1)
+            
+            # Key insight: Real faces have VARIED landmark movements
+            # Moving phone has UNIFORM landmark movements (all points move same amount)
+            
+            # Calculate variance in displacement magnitudes
+            displacement_variance = np.var(displacement_magnitudes)
+            mean_displacement = np.mean(displacement_magnitudes)
+            
+            # Calculate coefficient of variation (CV = std / mean)
+            if mean_displacement > 0.001:
+                cv = np.std(displacement_magnitudes) / mean_displacement
+            else:
+                cv = 0
+            
+            # Real faces: high CV (varied movement) - expressions cause differential motion
+            # Moving phone: low CV (uniform movement) - rigid body motion
+            
+            # Score based on variance and CV
+            if cv > 0.5:
+                # High variation - definitely real face with expressions
+                score = 1.0
+            elif cv > 0.3:
+                # Good variation - likely real face
+                score = 0.85
+            elif cv > 0.15:
+                # Moderate variation - could be subtle expressions or moving phone
+                score = 0.6
+            elif cv > 0.08:
+                # Low variation - likely moving phone/photo
+                score = 0.3
+            else:
+                # Very uniform motion - definitely moving phone/photo
+                score = 0.1
+            
+            # Additionally check for micro-expressions in mouth/eyes
+            # (distance changes between specific landmark pairs)
+            mouth_distance = np.linalg.norm(current_landmarks[2] - current_landmarks[3])
+            prev_mouth_distance = np.linalg.norm(prev_landmarks[2] - prev_landmarks[3])
+            mouth_change = abs(mouth_distance - prev_mouth_distance)
+            
+            if mouth_change > 0.005:  # Mouth movement detected
+                score = min(1.0, score + 0.15)
+            
+            return score
+            
+        except Exception as e:
+            return 0.5  # Neutral on error
     
     def _analyze_motion(self, current_frame_rgb):
         """
@@ -576,13 +688,7 @@ class LivenessDetector:
         except Exception as e:
             return 0.5
     
-    def reset(self):
-        """Reset detector state"""
-        self.frame_history.clear()
-        self.blink_history.clear()
-        self.eye_closed_frames = 0
-        self.blink_count = 0
-        self.last_blink_time = 0
+    # reset() method is defined earlier in the class
 
 
 # Global detector instance

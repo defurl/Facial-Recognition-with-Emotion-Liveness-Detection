@@ -338,6 +338,11 @@ class AttendanceSystemGUI:
         
         # Async emotion analysis to prevent blocking
         self.emotion_thread_running = False
+        
+        # Spoof detection state tracking
+        self.last_spoof_detection_time = 0
+        self.SPOOF_WARNING_DISPLAY_TIME = 2.0  # Show spoof warning for 2 seconds
+        self.spoof_warning_shown = False  # Track if warning has been shown
         self.last_emotion_check_frame = 0
         
         # Recognition statistics
@@ -1231,7 +1236,15 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     
                                     # Update results (thread-safe)
                                     self.last_emotion = emo
-                                    self.last_liveness = 'Real' if is_live_result else 'Spoof'
+                                    
+                                    # Handle liveness state transitions
+                                    new_liveness = 'Real' if is_live_result else 'Spoof'
+                                    if new_liveness == 'Real' and self.last_liveness == 'Spoof':
+                                        # Transitioning from Spoof to Real - reset detector
+                                        print("[LIVENESS] Face now passes checks - resetting spoof state")
+                                        reset_liveness_detector()
+                                    
+                                    self.last_liveness = new_liveness
                                     self.last_liveness_confidence = liveness_conf
                                     self.emotion_failure_count = 0
                                     
@@ -1254,13 +1267,31 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             # Spawn background thread
                             threading.Thread(target=async_emotion_analysis, daemon=True).start()
                         
-                        # Use last liveness result
+                        # Use last liveness result with 2-second warning display
+                        current_time = time.time()
+                        
+                        # Auto-recover after showing spoof warning for 2 seconds
+                        if self.last_liveness == 'Spoof':
+                            time_since_detection = current_time - self.last_spoof_detection_time
+                            if time_since_detection > self.SPOOF_WARNING_DISPLAY_TIME:
+                                # Reset to allow re-verification
+                                print("[LIVENESS] Spoof warning displayed for 2s - resetting for re-verification")
+                                self.last_liveness = 'Real'
+                                self.last_liveness_confidence = 0.0
+                                self.spoof_warning_shown = False
+                                reset_liveness_detector()
+                        
                         is_live = (self.last_liveness == 'Real')
 
                         # Check for spoof
                         if not is_live:
-                            self.last_identity = "Spoof Detected"
+                            self.last_identity = "⚠️ SPOOF - Blink to Verify"
                             box_color = (0, 0, 255)
+                            if not self.spoof_warning_shown:
+                                self.last_spoof_detection_time = current_time
+                                self.spoof_warning_shown = True
+                                print(f"[SPOOF] Blocking verification - spoof detected. Showing warning for 2s...")
+                            # Don't process verification for spoof, but don't freeze either
                         else:
                             # Verification with multi-embedding support
                             try:
