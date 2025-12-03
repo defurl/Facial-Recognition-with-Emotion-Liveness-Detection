@@ -46,6 +46,7 @@ class LivenessDetector:
         
         # Verification tracking
         self.verification_start_time = None
+        self.frame_counter = 0  # Initialize frame counter for diagnostics
         
     def analyze(self, face_image, landmarks=None):
         """
@@ -115,12 +116,28 @@ class LivenessDetector:
                 weights.append(0.35)  # PRIMARY indicator - balanced at 35%
                 
             except Exception as e:
-                details['blink'] = {'error': str(e), 'score': 0.5}
+                details['blink'] = {
+                    'error': str(e), 
+                    'score': 0.5,
+                    'has_blinked': False,
+                    'total_blinks': 0,
+                    'current_ear': 0.0,
+                    'blinks_needed': 1,
+                    'elapsed_time': 0.0
+                }
                 scores.append(0.5)
                 weights.append(0.40)
         else:
             # No landmarks - cannot do blink detection (penalize)
-            details['blink'] = {'error': 'No landmarks provided', 'score': 0.3}
+            details['blink'] = {
+                'error': 'No landmarks provided', 
+                'score': 0.3,
+                'has_blinked': False,
+                'total_blinks': 0,
+                'current_ear': 0.0,
+                'blinks_needed': 1,
+                'elapsed_time': 0.0
+            }
             scores.append(0.3)
             weights.append(0.40)
         
@@ -194,7 +211,7 @@ class LivenessDetector:
         # Log decision reasoning
         if not is_live:
             print(f"  [LIVENESS] ⚠️ SPOOF DETECTED: confidence={confidence:.1%} < threshold=55%")
-            if 'blink' in details:
+            if 'blink' in details and 'has_blinked' in details['blink']:
                 print(f"              Blink score: {details['blink']['score']:.1%}, Has blinked: {details['blink']['has_blinked']}")
         
         details['overall'] = confidence

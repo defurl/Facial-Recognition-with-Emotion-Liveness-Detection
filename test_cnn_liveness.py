@@ -4,6 +4,24 @@ Quick test script to verify CNN liveness model loads and works
 import sys
 sys.path.insert(0, 'src')
 
+import os
+# fix duplicate OpenMP runtime on Windows (libiomp5md.dll)
+# set before importing libraries that load OpenMP (e.g., torch, cv2)
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+# Suppress TensorFlow GPU warnings and disable GPU usage
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress TF warnings
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")  # Disable GPU for TensorFlow
+
+# Suppress OpenCV warnings (MSMF errors, etc.)
+os.environ.setdefault("OPENCV_VIDEOIO_DEBUG", "0")
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+
+# Disable MediaPipe GPU/hardware acceleration to prevent crashes
+os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "1")
+os.environ.setdefault("GLOG_minloglevel", "2")  # Suppress MediaPipe logs
+
 import torch
 import numpy as np
 from liveness_cnn import get_cnn_liveness_detector

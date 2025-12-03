@@ -332,12 +332,17 @@ class AttendanceSystemGUI:
         # Camera lock to prevent race conditions
         self.camera_lock = threading.Lock()
         
+        # Thread safety locks
+        self.emotion_lock = threading.Lock()
+        self.liveness_lock = threading.Lock()
+        
         # Emotion analysis failure tracking for graceful degradation
         self.emotion_failure_count = 0
         self.emotion_analysis_enabled = True
         
         # Async emotion analysis to prevent blocking
         self.emotion_thread_running = False
+        self.emotion_thread = None  # Track thread reference for cleanup
         
         # Spoof detection state tracking
         self.last_spoof_detection_time = 0
@@ -631,8 +636,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         for idx in preferred_indices:
             cap = None
             try:
-                print(f"Trying camera {0}...")
-                cap = cv2.VideoCapture(0)
+                print(f"Trying camera {idx}...")
+                cap = cv2.VideoCapture(idx)
                 
                 if cap is None:
                     continue
@@ -736,8 +741,17 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             self.stop_camera()
     
     def stop_camera(self):
-        """Stop camera"""
+        """Stop camera and clean up"""
         self.running = False
+        
+        # Wait for threads to finish gracefully
+        try:
+            # Wait for emotion thread to finish
+            if self.emotion_thread and self.emotion_thread.is_alive():
+                self.emotion_thread_running = False
+                self.emotion_thread.join(timeout=1.0)
+        except Exception as e:
+            print(f"Warning: Error waiting for emotion thread: {e}")
         
         # Wait for capture thread to finish
         time.sleep(0.2)
@@ -1239,32 +1253,37 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     emotion_time = (time.time() - emotion_start) * 1000
                                     print(f"  [TIMING] Emotion & Liveness: {emotion_time:.2f}ms")
                                     
-                                    # Update results (thread-safe)
-                                    self.last_emotion = emo
+                                    # Update results with proper thread safety
+                                    with self.emotion_lock:
+                                        self.last_emotion = emo
                                     
                                     # HYSTERESIS: Require consecutive same results to reduce flicker
                                     new_liveness = 'Real' if is_live_result else 'Spoof'
                                     
-                                    if new_liveness == 'Spoof':
-                                        self.consec_spoof_count += 1
-                                        self.consec_real_count = 0
-                                    else:
-                                        self.consec_real_count += 1
-                                        self.consec_spoof_count = 0
+                                    with self.liveness_lock:
+                                        if new_liveness == 'Spoof':
+                                            self.consec_spoof_count += 1
+                                            self.consec_real_count = 0
+                                        else:
+                                            self.consec_real_count += 1
+                                            self.consec_spoof_count = 0
                                     
-                                    # Only update UI state after consecutive confirmations
-                                    if self.consec_spoof_count >= self.CONSEC_REQUIRED:
-                                        if self.last_liveness != 'Spoof':
-                                            print(f"[LIVENESS] {self.consec_spoof_count} consecutive Spoof detections - updating UI")
-                                        self.last_liveness = 'Spoof'
-                                    elif self.consec_real_count >= self.CONSEC_REQUIRED:
-                                        if self.last_liveness == 'Spoof':
-                                            print("[LIVENESS] Face now passes checks - resetting spoof state")
-                                            reset_liveness_detector()
-                                        self.last_liveness = 'Real'
-                                    
-                                    self.last_liveness_confidence = liveness_conf
-                                    self.emotion_failure_count = 0
+                                        # Only update UI state after consecutive confirmations
+                                        if self.consec_spoof_count >= self.CONSEC_REQUIRED:
+                                            if self.last_liveness != 'Spoof':
+                                                print(f"[LIVENESS] {self.consec_spoof_count} consecutive Spoof detections - updating UI")
+                                            self.last_liveness = 'Spoof'
+                                        elif self.consec_real_count >= self.CONSEC_REQUIRED:
+                                            if self.last_liveness == 'Spoof':
+                                                print("[LIVENESS] Face now passes checks - resetting spoof state")
+                                                try:
+                                                    reset_liveness_detector()
+                                                except Exception as reset_e:
+                                                    print(f"Warning: Error resetting liveness detector: {reset_e}")
+                                            self.last_liveness = 'Real'
+                                        
+                                        self.last_liveness_confidence = liveness_conf
+                                        self.emotion_failure_count = 0
                                     
                                     print(f"  [RESULT] Emotion: {emo} | Liveness: {'Real' if is_live_result else 'Spoof'} "
                                           f"({liveness_conf:.1%} confidence)")
@@ -1273,17 +1292,26 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         print(f"  [Liveness] Blink: {blink_info.get('has_blinked', False)} | "
                                               f"Total Blinks: {blink_info.get('total_blinks', 0)}")
                                 except Exception as e:
-                                    self.emotion_failure_count += 1
+                                    with self.emotion_lock:
+                                        self.emotion_failure_count += 1
                                     print(f"[WARNING] Emotion/liveness error ({self.emotion_failure_count}/10): {e}")
                                     
                                     if self.emotion_failure_count >= 10:
-                                        self.emotion_analysis_enabled = False
+                                        with self.emotion_lock:
+                                            self.emotion_analysis_enabled = False
                                         print("[ERROR] Emotion/liveness analysis disabled due to repeated failures.")
                                 finally:
-                                    self.emotion_thread_running = False
+                                    with self.emotion_lock:
+                                        self.emotion_thread_running = False
                             
-                            # Spawn background thread
-                            threading.Thread(target=async_emotion_analysis, daemon=True).start()
+                            # Spawn background thread with better error handling
+                            try:
+                                self.emotion_thread = threading.Thread(target=async_emotion_analysis, daemon=True)
+                                self.emotion_thread.start()
+                            except Exception as thread_e:
+                                print(f"[ERROR] Failed to start emotion analysis thread: {thread_e}")
+                                with self.emotion_lock:
+                                    self.emotion_thread_running = False
                         
                         # Use last liveness result with 2-second warning display
                         current_time = time.time()
