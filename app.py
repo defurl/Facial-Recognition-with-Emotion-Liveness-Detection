@@ -321,10 +321,12 @@ class AttendanceSystemGUI:
         self.last_attendance_message = ""
         self.attendance_attempt_cache = {}  # Track last attempt time per person to prevent repeated I/O
         
-        # Registration mode
+        # Registration state tracking
         self.registration_mode = False
         self.registration_name = ""
         self.registration_state = None  # Will hold state machine data during registration
+        self.registration_feedback = ""  # Persistent feedback message
+        self.registration_feedback_color = (255, 165, 0)  # Default orange
         
         # Thread-safe queue for frames - optimized queue size
         self.frame_queue = queue.Queue(maxsize=1)  # Smaller queue to reduce lag
@@ -844,29 +846,36 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 return
             
             # Import config constants
-            from config import (
-                REGISTRATION_POSES_FULL, REGISTRATION_INSTRUCTIONS_FULL
-            )
-            
-            # Use 5 poses (center, left, right, up, down) for better coverage
-            # Skip the final "center again" from full mode
-            poses = REGISTRATION_POSES_FULL[:5]
-            instructions = REGISTRATION_INSTRUCTIONS_FULL[:5]
-            
-            self.registration_mode = True
-            self.registration_name = name
-            self.registration_state = {
-                'step': 0,
-                'poses_required': poses,
-                'instructions': instructions,
-                'frames': [],
-                'embeddings': [],
-                'hold_frames': 0,
-                'last_check_frame': 0,
-                'completing': False  # Flag to prevent multiple completion calls
-            }
-            self.status_text.set(f"🔵 Step 1/{len(poses)}: {instructions[0]}")
-            dialog.destroy()
+            try:
+                from config import (
+                    REGISTRATION_POSES_FULL, REGISTRATION_INSTRUCTIONS_FULL
+                )
+                
+                # Use 5 poses (center, left, right, up, down) for better coverage
+                # Skip the final "center again" from full mode
+                poses = REGISTRATION_POSES_FULL[:5]
+                instructions = REGISTRATION_INSTRUCTIONS_FULL[:5]
+                
+                self.registration_mode = True
+                self.registration_name = name
+                self.registration_state = {
+                    'step': 0,
+                    'poses_required': poses,
+                    'instructions': instructions,
+                    'frames': [],
+                    'embeddings': [],
+                    'hold_frames': 0,
+                    'last_check_frame': 0,
+                    'completing': False  # Flag to prevent multiple completion calls
+                }
+                # Clear any previous feedback
+                self.registration_feedback = ""
+                self.status_text.set(f"🔵 Step 1/{len(poses)}: {instructions[0]}")
+                dialog.destroy()
+            except Exception as e:
+                print(f"Registration initialization error: {e}")
+                messagebox.showerror("Error", f"Failed to start registration: {e}")
+                return
         
         # Buttons
         button_frame = tk.Frame(content, bg='#f0f0f0')
@@ -963,8 +972,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
     
     def capture_frames(self):
         """Capture and process video frames (runs in background thread) - optimized"""
-        fps_counter = 0
-        fps_start_time = time.time()
         consecutive_errors = 0
         max_consecutive_errors = 30  # Stop after 30 consecutive failures (~1 second)
         
@@ -1004,17 +1011,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             frame = cv2.flip(frame, 1)
             self.frame_count += 1
-            fps_counter += 1
-            
-            # Calculate FPS every second
-            current_time = time.time()
-            if current_time - fps_start_time >= 1.0:
-                fps = fps_counter / (current_time - fps_start_time)
-                # Display FPS on frame for debugging
-                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                fps_counter = 0
-                fps_start_time = current_time
             
             if self.registration_mode and self.registration_state:
                 state = self.registration_state
@@ -1076,50 +1072,58 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 cv2.putText(frame, instruction_text, (text_x, text_y), 
                            font, 0.85, (255, 255, 255), 1, cv2.LINE_AA)
                 
-                # Check every 15 frames (~0.5 seconds at 30fps) to reduce flickering
-                if self.frame_count - state['last_check_frame'] >= 15:
+                # Simple feedback text at bottom - minimal processing
+                if hasattr(self, 'registration_feedback') and self.registration_feedback:
+                    cv2.putText(frame, self.registration_feedback, (20, h - 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, self.registration_feedback_color, 2, cv2.LINE_AA)
+                
+                # Check every 30 frames (~1 second at 30fps) to reduce processing load and flickering
+                if self.frame_count - state['last_check_frame'] >= 30:
                     state['last_check_frame'] = self.frame_count
                     
                     faces = detect_faces(frame)
                     if len(faces) == 0:
-                        cv2.putText(frame, "No face detected", (10, h - 40), 
-                                   cv2.FONT_HERSHEY_DUPLEX, 0.65, (231, 76, 60), 1, cv2.LINE_AA)
+                        self.registration_feedback = "No face detected"
+                        self.registration_feedback_color = (231, 76, 60)
                         state['hold_frames'] = 0
                     else:
                         x, y, w, h = faces[0]
                         cropped_face = crop_face_with_padding(frame, x, y, w, h)
                         
                         if cropped_face.size == 0 or cropped_face.shape[0] < 50:
-                            cv2.putText(frame, "Face too small", (10, h - 40), 
-                                       cv2.FONT_HERSHEY_DUPLEX, 0.65, (231, 76, 60), 1, cv2.LINE_AA)
+                            self.registration_feedback = "Face too small"
+                            self.registration_feedback_color = (231, 76, 60)
                             state['hold_frames'] = 0
                         else:
-                            # Import quality check functions
-                            from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
-                            
-                            # Quick quality checks
-                            blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=40)
-                            brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
-                            
-                            # Pose validation
-                            target_pose = state['poses_required'][state['step']]
-                            yaw, pitch, roll, _, _, _ = estimate_head_pose_angles(cropped_face)
-                            pose_ok, _, pose_feedback = validate_pose_for_target(yaw, pitch, target_pose, is_strict=False)
-                            
-                            # Debug: Show current angles
-                            print(f"[REGISTRATION] Target: {target_pose} | Yaw: {yaw:.1f} | Pitch: {pitch:.1f} | Match: {pose_ok}")
+                            # Import quality check functions safely
+                            try:
+                                from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
+                                
+                                # Quick quality checks
+                                blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=40)
+                                brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
+                                
+                                # Pose validation
+                                target_pose = state['poses_required'][state['step']]
+                                yaw, pitch, roll, _, _, _ = estimate_head_pose_angles(cropped_face)
+                                pose_ok, _, pose_feedback = validate_pose_for_target(yaw, pitch, target_pose, is_strict=False)
+                            except Exception as util_e:
+                                print(f"Warning: Quality check error: {util_e}")
+                                # Default to accepting the frame if utils fail
+                                blur_ok, lighting_ok, pose_ok = True, True, True
+                                pose_feedback = "Processing..."
                             
                             if blur_ok and lighting_ok and pose_ok:
                                 state['hold_frames'] += 1
-                                remaining = 5 - state['hold_frames']
+                                remaining = 3 - state['hold_frames']
                                 
                                 if remaining > 0:
-                                    cv2.putText(frame, f"Hold steady... {remaining}", (10, frame.shape[0] - 40),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
+                                    self.registration_feedback = f"Hold steady... {remaining}"
+                                    self.registration_feedback_color = (0, 255, 0)
                                 else:
                                     # Capture this pose
-                                    cv2.putText(frame, "Captured!", (10, h - 40), 
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
+                                    self.registration_feedback = "Captured!"
+                                    self.registration_feedback_color = (0, 255, 0)
                                     
                                     try:
                                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
@@ -1144,25 +1148,18 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             else:
                                 state['hold_frames'] = 0
                                 if not blur_ok:
-                                    cv2.putText(frame, "Image too blurry", (10, h - 40), 
-                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
+                                    self.registration_feedback = "Image too blurry"
+                                    self.registration_feedback_color = (255, 165, 0)
                                 elif not lighting_ok:
-                                    cv2.putText(frame, "Poor lighting", (10, h - 40), 
-                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
+                                    self.registration_feedback = "Poor lighting"
+                                    self.registration_feedback_color = (255, 165, 0)
                                 elif not pose_ok:
-                                    # Show pose feedback with current angles
-                                    cv2.putText(frame, f"Current: Yaw={yaw:.1f} Pitch={pitch:.1f}", (10, h - 70), 
-                                               cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                                    cv2.putText(frame, f"Adjust Pose: {pose_feedback}", (10, h - 40), 
-                                               cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 165, 0), 1, cv2.LINE_AA)
+                                    self.registration_feedback = f"Adjust Pose: {pose_feedback}"
+                                    self.registration_feedback_color = (255, 165, 0)
                 else:
-                    # Show persistent hold counter at bottom (lighter weight)
-                    if state.get('hold_frames', 0) > 0:
-                        remaining = max(0, 5 - state['hold_frames'])
-                        cv2.putText(frame, f"Hold steady... {remaining}", (10, h - 40), 
-                                   cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 0), 1, cv2.LINE_AA)
-            
-            # ========== TIMING: Face Detection ==========
+                    # Initialize feedback if not set
+                    if not hasattr(self, 'registration_feedback'):
+                        self.registration_feedback = ""            # ========== TIMING: Face Detection ==========
             detect_start = time.time()
             faces = detect_faces(frame)
             detect_time = (time.time() - detect_start) * 1000  # Convert to ms

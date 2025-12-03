@@ -358,28 +358,32 @@ def validate_pose_for_target(yaw, pitch, target_pose, strict_tolerance=10.0, rel
         tuple: (matches: bool, tolerance_used: float, feedback: str)
     """
     try:
+        # Account for horizontally flipped camera - invert yaw for left/right detection
+        # When camera is flipped, turning right appears as negative yaw, turning left as positive yaw
+        mirrored_yaw = -yaw  # Invert yaw to match user's perspective
+        
         yaw_tol = strict_tolerance if is_strict else relaxed_tolerance
         pitch_tol = 60.0 if is_strict else 70.0  # Very lenient for pitch (camera angle variations)
         
         if target_pose == "center":
-            matches = abs(yaw) <= yaw_tol and abs(pitch) <= pitch_tol
-            feedback = "OK" if matches else f"Target: 0 deg (+/-{yaw_tol:.0f} deg)"
+            matches = abs(mirrored_yaw) <= yaw_tol and abs(pitch) <= pitch_tol
+            feedback = "OK" if matches else f"Look straight"
         elif target_pose == "left":
             target_yaw = -30
-            matches = (yaw < -15) and (yaw > -50) and abs(pitch) <= pitch_tol
-            feedback = "OK" if matches else f"Turn left (Target: {target_yaw} deg)"
+            matches = (mirrored_yaw < -15) and (mirrored_yaw > -50) and abs(pitch) <= pitch_tol
+            feedback = "OK" if matches else f"Turn left"
         elif target_pose == "right":
             target_yaw = 30
-            matches = (yaw > 15) and (yaw < 50) and abs(pitch) <= pitch_tol
-            feedback = "OK" if matches else f"Turn right (Target: {target_yaw} deg)"
+            matches = (mirrored_yaw > 15) and (mirrored_yaw < 50) and abs(pitch) <= pitch_tol
+            feedback = "OK" if matches else f"Turn right"
         elif target_pose == "up":
             # Looking up: pitch should be MORE NEGATIVE (e.g., -60 to -80)
-            matches = (pitch < -55) and (pitch > -85) and abs(yaw) <= yaw_tol
-            feedback = "OK" if matches else f"Look up (Target: -70 deg)"
+            matches = (pitch < -55) and (pitch > -85) and abs(mirrored_yaw) <= yaw_tol
+            feedback = "OK" if matches else f"Look up"
         elif target_pose == "down":
             # Looking down: pitch should be LESS NEGATIVE (e.g., -20 to -40)
-            matches = (pitch > -45) and (pitch < -15) and abs(yaw) <= yaw_tol
-            feedback = "OK" if matches else f"Look down (Target: -30 deg)"
+            matches = (pitch > -45) and (pitch < -15) and abs(mirrored_yaw) <= yaw_tol
+            feedback = "OK" if matches else f"Look down"
         else:
             matches = False
             feedback = "Unknown target"

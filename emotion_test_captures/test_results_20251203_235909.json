@@ -1,0 +1,10 @@
+[
+  {
+    "filename": "neutral_20251203_235802.jpg",
+    "expected_emotion": "neutral",
+    "timestamp": "20251203_235802",
+    "analysis": {
+      "opencv": {
+        "dominant": "angry",
+        "scores": {
+          "angry": 

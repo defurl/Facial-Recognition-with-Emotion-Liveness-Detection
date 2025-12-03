@@ -40,6 +40,7 @@ class LivenessDetector:
         # History buffers
         self.frame_history = deque(maxlen=motion_history_size)
         self.landmark_history = deque(maxlen=10)  # Track last 10 landmark positions
+        self.motion_history = deque(maxlen=10)  # Track motion magnitudes
         
         # Initialize blink detector
         self.blink_detector = BlinkDetector(ear_threshold=blink_threshold)
@@ -113,7 +114,7 @@ class LivenessDetector:
                 }
                 
                 scores.append(blink_score)
-                weights.append(0.35)  # PRIMARY indicator - balanced at 35%
+                weights.append(0.40)  # PRIMARY indicator - 40% weight
                 
             except Exception as e:
                 details['blink'] = {
@@ -145,53 +146,59 @@ class LivenessDetector:
         texture_score = self._analyze_texture(face_image)
         details['texture'] = texture_score
         scores.append(texture_score)
-        weights.append(0.15)  # Reduced weight
+        weights.append(0.10)  # Reduced weight
         
         # 3. Color Distribution Analysis
         color_score = self._analyze_color_distribution(face_image)
         details['color'] = color_score
         scores.append(color_score)
-        weights.append(0.10)  # Reduced weight
+        weights.append(0.08)  # Reduced weight
         
-        # 4. Moiré Pattern Detection
+        # 4. Blue Light Analysis (phone screen detection)
+        blue_score = self._detect_blue_light(face_image)
+        details['blue_light'] = blue_score
+        scores.append(blue_score)
+        weights.append(0.08)  # Phone screen indicator
+        
+        # 5. Moiré Pattern Detection
         moire_score = self._detect_moire_patterns(face_image)
         details['moire'] = moire_score
         scores.append(moire_score)
-        weights.append(0.10)  # Reduced weight
+        weights.append(0.08)  # Reduced weight
         
-        # 5. Facial Landmark Motion Analysis (detects expression changes vs rigid movement)
+        # 6. Facial Landmark Motion Analysis (detects expression changes vs rigid movement)
         landmark_motion_score = 0.5  # Default neutral
         if landmarks is not None:
             landmark_motion_score = self._analyze_landmark_motion(landmarks)
             details['landmark_motion'] = landmark_motion_score
             scores.append(landmark_motion_score)
-            weights.append(0.25)  # INCREASED: Key differentiator for moving phone vs real face
+            weights.append(0.22)  # Key differentiator for moving phone vs real face
         
-        # 6. Frame Motion Analysis (if sufficient history) - reduced weight
+        # 7. Frame Motion Analysis (if sufficient history) - reduced weight
         if len(self.frame_history) >= 3:
             motion_score = self._analyze_motion(face_image)
             details['motion'] = motion_score
             scores.append(motion_score)
-            weights.append(0.05)  # Reduced - can be fooled by moving phone
+            weights.append(0.03)  # Reduced - can be fooled by moving phone
         
-        # 7. Edge Detection
+        # 8. Screen Edge Detection
         edge_score = self._detect_screen_edges(face_image)
         details['edge_detection'] = edge_score
         scores.append(edge_score)
-        weights.append(0.03)
+        weights.append(0.05)  # Increased for phone detection
         
-        # 8. Reflection Detection
+        # 9. Screen Reflection Detection (ENHANCED)
         reflection_score = self._detect_screen_reflections(face_image)
         details['reflection'] = reflection_score
         scores.append(reflection_score)
-        weights.append(0.02)
+        weights.append(0.05)  # Increased for phone detection
         
-        # 9. Temporal Consistency
+        # 10. Temporal Consistency
         if len(self.frame_history) >= 3:
             temporal_score = self._analyze_temporal_consistency(face_image)
             details['temporal'] = temporal_score
             scores.append(temporal_score)
-            weights.append(0.03)
+            weights.append(0.04)
         
         # Store frame for motion tracking
         gray = cv2.cvtColor(face_image, cv2.COLOR_RGB2GRAY)
@@ -202,17 +209,21 @@ class LivenessDetector:
         weights = weights / weights.sum()  # Normalize
         confidence = np.average(scores, weights=weights)
         
-        # Decision threshold: 55% (adjusted to reduce false positives on real faces)
+        # Decision threshold: 58% (stricter to reject phone screens)
         # Real faces with blinks: 70-85%
-        # Real faces without blinks yet (waiting): 50-65%
-        # Photos/screens (no blinks): 25-50%
-        is_live = confidence >= 0.55
+        # Real faces without blinks yet (waiting): 52-65%
+        # Photos/screens (no blinks): 20-45%
+        is_live = confidence >= 0.58
         
         # Log decision reasoning
         if not is_live:
-            print(f"  [LIVENESS] ⚠️ SPOOF DETECTED: confidence={confidence:.1%} < threshold=55%")
+            print(f"  [LIVENESS] ⚠️ SPOOF DETECTED: confidence={confidence:.1%} < threshold=58%")
             if 'blink' in details and 'has_blinked' in details['blink']:
                 print(f"              Blink score: {details['blink']['score']:.1%}, Has blinked: {details['blink']['has_blinked']}")
+            if 'blue_light' in details:
+                print(f"              Blue light score: {details['blue_light']:.1%} (low = screen detected)")
+            if 'reflection' in details:
+                print(f"              Reflection score: {details['reflection']:.1%} (low = glare detected)")
         
         details['overall'] = confidence
         details['decision'] = 'Real' if is_live else 'Spoof'
@@ -228,6 +239,7 @@ class LivenessDetector:
         """Reset detector state for new verification"""
         self.frame_history.clear()
         self.landmark_history.clear()
+        self.motion_history.clear()
         if hasattr(self, 'blink_detector') and self.blink_detector:
             self.blink_detector.reset()
         self.verification_start_time = None
@@ -308,6 +320,84 @@ class LivenessDetector:
             score = (l_score + a_score + b_score) / 3.0
             
             return score
+        except Exception as e:
+            return 0.5
+    
+    def _detect_blue_light(self, face_image):
+        """
+        Detect blue light characteristic of phone/tablet screens.
+        Phone screens emit more blue light (cooler color temperature) than natural faces.
+        
+        Returns:
+            score: float (0-1, higher = more likely real/natural lighting)
+        """
+        try:
+            # Analyze color channels
+            b_channel = face_image[:, :, 2].astype(np.float32)
+            g_channel = face_image[:, :, 1].astype(np.float32)
+            r_channel = face_image[:, :, 0].astype(np.float32)
+            
+            # Calculate average intensities
+            b_mean = np.mean(b_channel)
+            g_mean = np.mean(g_channel)
+            r_mean = np.mean(r_channel)
+            
+            # Calculate blue/red ratio (phone screens have higher B/R ratio)
+            if r_mean > 10:  # Avoid division by zero
+                br_ratio = b_mean / r_mean
+            else:
+                br_ratio = 1.0
+            
+            # Calculate blue/green ratio
+            if g_mean > 10:
+                bg_ratio = b_mean / g_mean
+            else:
+                bg_ratio = 1.0
+            
+            # Real faces under natural/warm lighting: B/R ratio 0.7-0.95
+            # Phone screens (LED backlight): B/R ratio 0.95-1.3 (more blue)
+            # Phone screens: B/G ratio 0.95-1.2
+            
+            score = 1.0
+            
+            # Penalize blue-shifted images (phone screens)
+            if br_ratio > 1.15:  # Strong blue shift
+                score *= 0.4
+            elif br_ratio > 1.05:  # Moderate blue shift
+                score *= 0.6
+            elif br_ratio > 0.98:  # Slight blue shift
+                score *= 0.8
+            
+            # Check blue-green ratio as well
+            if bg_ratio > 1.10:  # Strong blue dominance
+                score *= 0.5
+            elif bg_ratio > 1.00:  # Moderate blue dominance
+                score *= 0.75
+            
+            # Also check for overall color temperature
+            # Calculate color temperature indicator
+            color_temp = (r_mean + g_mean) / (b_mean + 1)
+            
+            # Natural faces: color_temp > 1.8 (warmer)
+            # Phone screens: color_temp 1.3-1.7 (cooler)
+            if color_temp < 1.4:  # Very cool (blue)
+                score *= 0.5
+            elif color_temp < 1.6:  # Cool
+                score *= 0.7
+            elif color_temp < 1.8:  # Slightly cool
+                score *= 0.85
+            
+            # Check for blue dominance in bright regions (screen glare is very blue)
+            bright_mask = (r_channel + g_channel + b_channel) > 600
+            if np.sum(bright_mask) > 0:
+                bright_b_mean = np.mean(b_channel[bright_mask])
+                bright_r_mean = np.mean(r_channel[bright_mask])
+                if bright_r_mean > 10:
+                    bright_br_ratio = bright_b_mean / bright_r_mean
+                    if bright_br_ratio > 1.2:  # Blue glare (typical of screens)
+                        score *= 0.5
+            
+            return max(0.0, score)
         except Exception as e:
             return 0.5
     
@@ -464,7 +554,10 @@ class LivenessDetector:
                 'landmark_score': float(landmark_data if isinstance(landmark_data, (int, float)) else 0.5),
                 'texture': float(details.get('texture', 0.0)),
                 'color': float(details.get('color', 0.0)),
+                'blue_light': float(details.get('blue_light', 0.0)),
                 'moire': float(details.get('moire', 0.0)),
+                'reflection': float(details.get('reflection', 0.0)),
+                'edge_detection': float(details.get('edge_detection', 0.0)),
                 'motion': float(details.get('motion', 0.0)),
                 'elapsed': float(details.get('elapsed_time', 0.0))
             }
@@ -607,7 +700,7 @@ class LivenessDetector:
     
     def _detect_screen_reflections(self, face_image):
         """
-        Detect specular reflections characteristic of glossy phone/tablet screens.
+        ENHANCED: Detect specular reflections characteristic of glossy phone/tablet screens.
         Real faces have diffuse reflection, screens have bright specular highlights.
         
         Returns:
@@ -619,43 +712,83 @@ class LivenessDetector:
             l_channel = lab[:, :, 0]
             
             # Find very bright regions (potential reflections)
-            bright_threshold = 220  # Very bright pixels
+            bright_threshold = 215  # Lowered to catch more reflections
             bright_mask = l_channel > bright_threshold
             bright_ratio = np.sum(bright_mask) / bright_mask.size
+            
+            # Find extremely bright spots (strong glare)
+            extreme_bright_mask = l_channel > 240
+            extreme_bright_ratio = np.sum(extreme_bright_mask) / extreme_bright_mask.size
             
             # Analyze brightness distribution
             brightness_std = np.std(l_channel)
             brightness_max = np.max(l_channel)
+            brightness_mean = np.mean(l_channel)
             
             # Calculate local brightness variance (screens have spotty highlights)
             kernel_size = 15
             kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size**2)
             local_mean = cv2.filter2D(l_channel.astype(np.float32), -1, kernel)
             local_variance = cv2.filter2D((l_channel.astype(np.float32) - local_mean)**2, -1, kernel)
-            high_variance_ratio = np.sum(local_variance > 500) / local_variance.size
+            high_variance_ratio = np.sum(local_variance > 400) / local_variance.size  # Lowered threshold
+            
+            # Detect concentrated bright spots (typical of screen glare)
+            # Use morphological operations to find compact bright regions
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            bright_dilated = cv2.dilate(bright_mask.astype(np.uint8), kernel)
+            bright_eroded = cv2.erode(bright_dilated, kernel)
+            compact_bright_ratio = np.sum(bright_eroded > 0) / bright_eroded.size
             
             # Score based on reflection indicators
             score = 1.0
             
+            # STRONGER penalties for phone screen reflections
+            
             # Penalize bright spots (screen reflections)
-            if bright_ratio > 0.05:  # More than 5% very bright pixels
+            if bright_ratio > 0.08:  # More than 8% very bright
+                score *= 0.3  # Strong penalty
+            elif bright_ratio > 0.05:  # More than 5% very bright
                 score *= 0.5
-            elif bright_ratio > 0.02:  # More than 2% very bright pixels
+            elif bright_ratio > 0.03:  # More than 3% very bright
                 score *= 0.7
+            elif bright_ratio > 0.015:  # More than 1.5% very bright
+                score *= 0.85
+            
+            # Penalize extreme bright spots (strong glare)
+            if extreme_bright_ratio > 0.02:  # More than 2% extreme bright
+                score *= 0.4  # Very strong penalty
+            elif extreme_bright_ratio > 0.01:  # More than 1% extreme bright
+                score *= 0.6
+            
+            # Penalize compact bright spots (concentrated glare typical of screens)
+            if compact_bright_ratio > 0.03:
+                score *= 0.5
+            elif compact_bright_ratio > 0.015:
+                score *= 0.75
             
             # Penalize high maximum brightness (glare)
-            if brightness_max > 245:  # Very bright glare
+            if brightness_max > 250:  # Extreme glare
+                score *= 0.4
+            elif brightness_max > 240:  # Very bright glare
                 score *= 0.6
-            elif brightness_max > 235:  # Bright spots
+            elif brightness_max > 230:  # Bright spots
                 score *= 0.8
             
             # Penalize high local variance (spotty reflections)
-            if high_variance_ratio > 0.15:  # Many high-variance regions
+            if high_variance_ratio > 0.20:  # Many high-variance regions
+                score *= 0.5
+            elif high_variance_ratio > 0.12:  # Some high-variance regions
                 score *= 0.7
             
             # Real faces have moderate, even brightness
             # Screens have extreme highlights and shadows
-            if brightness_std > 45:  # Very high contrast
+            if brightness_std > 50:  # Very high contrast
+                score *= 0.7
+            elif brightness_std > 40:  # High contrast
+                score *= 0.85
+            
+            # Penalize overly bright faces (screens tend to be brighter)
+            if brightness_mean > 180:  # Unusually bright
                 score *= 0.8
             
             return max(0.0, score)

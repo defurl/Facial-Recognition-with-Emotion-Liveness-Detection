@@ -53,12 +53,12 @@ CAMERA_INDEX = 1  # default camera index; app will fallback to others if unavail
 # ============= Registration Settings =============
 REGISTRATION_MODE_FULL = 6  # number of captures for full registration
 REGISTRATION_MODE_QUICK = 3  # number of captures for quick registration
-REGISTRATION_POSES_FULL = ["center", "left", "right", "up", "down", "center"]
-REGISTRATION_POSES_QUICK = ["center", "left", "right"]
+REGISTRATION_POSES_FULL = ["center", "right", "left", "up", "down", "center"]
+REGISTRATION_POSES_QUICK = ["center", "right", "left"]
 REGISTRATION_INSTRUCTIONS_FULL = [
     "Face forward",
-    "Turn left",
     "Turn right",
+    "Turn left",
     "Look up",
     "Look down",
     "Face forward again"

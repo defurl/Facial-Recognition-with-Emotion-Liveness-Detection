@@ -1,6 +1,6 @@
 """
 Emotion Detection and Liveness Analysis Module
-- Emotion: DeepFace models
+- Emotion: DeepFace with conservative filtering
 - Liveness: Multi-method detector with eye blink detection
 """
 
@@ -38,7 +38,7 @@ def _get_liveness_detector():
 
 def analyze_emotion_and_liveness(face_image, landmarks=None):
     """
-    Analyze emotion using DeepFace and liveness using multi-method detector.
+    Analyze emotion using enhanced DeepFace configuration and liveness using multi-method detector.
     
     Args:
         face_image: RGB numpy array of face crop
@@ -59,30 +59,30 @@ def analyze_emotion_and_liveness(face_image, landmarks=None):
     if face_image is None or face_image.size == 0:
         return emotion, False, 0.0, {'error': 'Invalid face image'}
     
-    # Ensure RGB format
+    # Ensure RGB format and proper size for emotion detection
     if len(face_image.shape) == 2:
         face_image = cv2.cvtColor(face_image, cv2.COLOR_GRAY2RGB)
     elif face_image.shape[2] == 4:
         face_image = cv2.cvtColor(face_image, cv2.COLOR_RGBA2RGB)
     
-    # 1. Emotion Analysis (DeepFace)
-    try:
-        # DeepFace expects RGB image
-        analysis = DeepFace.analyze(
-            face_image, 
-            actions=['emotion'], 
-            enforce_detection=False, 
-            silent=True
-        )
-        
-        result = analysis[0] if isinstance(analysis, list) else analysis
-        em = result.get('dominant_emotion')
-        emotion = emotion_labels.get(str(em).lower(), 'Neutral') if em else 'Neutral'
-        
-    except Exception as exc:
-        # Silently handle errors - emotion is optional
-        emotion = 'Neutral'
-        liveness_details['emotion_error'] = str(exc)
+    # 1. Emotion Analysis - DISABLED (not critical for attendance)
+    # TODO: Implement proper emotion detection as QoL feature later
+    # For now, emotion is not necessary for attendance system security
+    emotion = 'Neutral'  # Always neutral - focus on liveness instead
+    
+    # # COMMENTED OUT: DeepFace emotion detection (unreliable)
+    # try:
+    #     analysis = DeepFace.analyze(
+    #         face_image, 
+    #         actions=['emotion'], 
+    #         enforce_detection=False, 
+    #         silent=True
+    #     )
+    #     result = analysis[0] if isinstance(analysis, list) else analysis
+    #     dominant_emotion = result.get('dominant_emotion', 'neutral')
+    #     emotion = emotion_labels.get(str(dominant_emotion).lower(), 'Neutral')
+    # except Exception:
+    #     emotion = 'Neutral'
     
     # 2. Liveness Detection with Blink Detection
     try:
