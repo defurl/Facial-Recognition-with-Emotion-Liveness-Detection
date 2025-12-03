@@ -148,7 +148,7 @@ class LivenessDetector:
             landmark_motion_score = self._analyze_landmark_motion(landmarks)
             details['landmark_motion'] = landmark_motion_score
             scores.append(landmark_motion_score)
-            weights.append(0.10)
+            weights.append(0.25)  # INCREASED: Key differentiator for moving phone vs real face
         
         # 6. Frame Motion Analysis (if sufficient history) - reduced weight
         if len(self.frame_history) >= 3:
@@ -201,6 +201,10 @@ class LivenessDetector:
         details['decision'] = 'Real' if is_live else 'Spoof'
         details['elapsed_time'] = current_time - self.verification_start_time
         
+        # Per-frame diagnostic logging
+        self.frame_counter += 1
+        self._log_diagnostics(confidence, details)
+        
         return is_live, confidence, details
     
     def reset(self):
@@ -210,6 +214,7 @@ class LivenessDetector:
         if hasattr(self, 'blink_detector') and self.blink_detector:
             self.blink_detector.reset()
         self.verification_start_time = None
+        # Don't reset frame_counter - keep it incrementing for analysis
     
     def _analyze_texture(self, face_image):
         """
@@ -381,22 +386,28 @@ class LivenessDetector:
             # Real faces: high CV (varied movement) - expressions cause differential motion
             # Moving phone: low CV (uniform movement) - rigid body motion
             
-            # Score based on variance and CV
-            if cv > 0.5:
+            # IMPROVED: Sharper sigmoid penalty for rigid motion
+            # Use sigmoid mapping: score = 1 / (1 + exp(-k*(cv - threshold)))
+            # This creates a steep penalty zone for low CV values
+            
+            if cv > 0.4:
                 # High variation - definitely real face with expressions
                 score = 1.0
-            elif cv > 0.3:
+            elif cv > 0.25:
                 # Good variation - likely real face
-                score = 0.85
+                score = 0.90
             elif cv > 0.15:
-                # Moderate variation - could be subtle expressions or moving phone
-                score = 0.6
-            elif cv > 0.08:
-                # Low variation - likely moving phone/photo
-                score = 0.3
+                # Moderate variation - acceptable for real faces
+                score = 0.70
+            elif cv > 0.10:
+                # Low-moderate variation - borderline (could be subtle expressions)
+                score = 0.45
+            elif cv > 0.06:
+                # Low variation - suspicious (likely moving phone)
+                score = 0.20
             else:
-                # Very uniform motion - definitely moving phone/photo
-                score = 0.1
+                # Very uniform motion - STRONG penalty for rigid body motion
+                score = 0.05
             
             # Additionally check for micro-expressions in mouth/eyes
             # (distance changes between specific landmark pairs)
@@ -411,6 +422,43 @@ class LivenessDetector:
             
         except Exception as e:
             return 0.5  # Neutral on error
+    
+    def _log_diagnostics(self, confidence, details):
+        """Log per-frame diagnostics to CSV for analysis"""
+        try:
+            import csv
+            import os
+            
+            outpath = 'outputs/liveness_debug.csv'
+            write_header = not os.path.exists(outpath)
+            
+            # Extract key metrics
+            blink_data = details.get('blink', {})
+            landmark_data = details.get('landmark_motion', {})
+            
+            debug_line = {
+                'timestamp': time.time(),
+                'frame': self.frame_counter,
+                'confidence': float(confidence),
+                'decision': details.get('decision', 'Unknown'),
+                'blink_score': float(blink_data.get('score', 0.0) if isinstance(blink_data, dict) else blink_data),
+                'has_blinked': bool(blink_data.get('has_blinked', False)) if isinstance(blink_data, dict) else False,
+                'total_blinks': int(blink_data.get('total_blinks', 0)) if isinstance(blink_data, dict) else 0,
+                'landmark_score': float(landmark_data if isinstance(landmark_data, (int, float)) else 0.5),
+                'texture': float(details.get('texture', 0.0)),
+                'color': float(details.get('color', 0.0)),
+                'moire': float(details.get('moire', 0.0)),
+                'motion': float(details.get('motion', 0.0)),
+                'elapsed': float(details.get('elapsed_time', 0.0))
+            }
+            
+            with open(outpath, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=list(debug_line.keys()))
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(debug_line)
+        except Exception as e:
+            pass  # Don't fail on logging errors
     
     def _analyze_motion(self, current_frame_rgb):
         """

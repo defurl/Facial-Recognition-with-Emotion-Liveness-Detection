@@ -289,7 +289,7 @@ class AttendanceSystemGUI:
         # Processing control - optimized for performance
         self.frame_count = 0
         self.PROCESS_EVERY_N_FRAMES = max(10, PROCESS_EVERY_N_FRAMES)  # Process every 10 frames to reduce lag - was 3
-        self.EMOTION_EVERY_N_FRAMES = 60  # Process emotion every 60 frames (~2 seconds) to reduce lag - was 15
+        self.EMOTION_EVERY_N_FRAMES = 45  # Process emotion every 45 frames (~1.5s) for faster feedback during tuning
         self.last_processed_frame = 0  # Track last processed frame time
         self.last_emotion = "Neutral"
         self.last_liveness = "Real"
@@ -344,6 +344,11 @@ class AttendanceSystemGUI:
         self.SPOOF_WARNING_DISPLAY_TIME = 2.0  # Show spoof warning for 2 seconds
         self.spoof_warning_shown = False  # Track if warning has been shown
         self.last_emotion_check_frame = 0
+        
+        # Hysteresis for liveness (reduce flicker from single-frame noise)
+        self.consec_spoof_count = 0
+        self.consec_real_count = 0
+        self.CONSEC_REQUIRED = 2  # Require 2 consecutive same results before updating UI
         
         # Recognition statistics
         self.recognition_stats = {
@@ -1237,14 +1242,27 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Update results (thread-safe)
                                     self.last_emotion = emo
                                     
-                                    # Handle liveness state transitions
+                                    # HYSTERESIS: Require consecutive same results to reduce flicker
                                     new_liveness = 'Real' if is_live_result else 'Spoof'
-                                    if new_liveness == 'Real' and self.last_liveness == 'Spoof':
-                                        # Transitioning from Spoof to Real - reset detector
-                                        print("[LIVENESS] Face now passes checks - resetting spoof state")
-                                        reset_liveness_detector()
                                     
-                                    self.last_liveness = new_liveness
+                                    if new_liveness == 'Spoof':
+                                        self.consec_spoof_count += 1
+                                        self.consec_real_count = 0
+                                    else:
+                                        self.consec_real_count += 1
+                                        self.consec_spoof_count = 0
+                                    
+                                    # Only update UI state after consecutive confirmations
+                                    if self.consec_spoof_count >= self.CONSEC_REQUIRED:
+                                        if self.last_liveness != 'Spoof':
+                                            print(f"[LIVENESS] {self.consec_spoof_count} consecutive Spoof detections - updating UI")
+                                        self.last_liveness = 'Spoof'
+                                    elif self.consec_real_count >= self.CONSEC_REQUIRED:
+                                        if self.last_liveness == 'Spoof':
+                                            print("[LIVENESS] Face now passes checks - resetting spoof state")
+                                            reset_liveness_detector()
+                                        self.last_liveness = 'Real'
+                                    
                                     self.last_liveness_confidence = liveness_conf
                                     self.emotion_failure_count = 0
                                     
