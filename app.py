@@ -56,6 +56,7 @@ from src.models import FaceEmbeddingCNN
 from src.data_loader import get_transforms
 from src.utils import detect_faces, crop_face_with_padding, face_mesh_detector
 from src.emotion import analyze_emotion_and_liveness, reset_liveness_detector
+from src.blink_detector import BlinkDetector
 from src.attendance import AttendanceLogger
 from src.explainability import ExplainabilityEngine
 from src.deep_knn import knn_predict_with_confidence, get_knn_explanation_text
@@ -443,7 +444,7 @@ class AttendanceSystemGUI:
         
         # Emotion analysis failure tracking for graceful degradation
         self.emotion_failure_count = 0
-        self.emotion_analysis_enabled = False  # Start disabled to prevent first-run deadlock
+        self.emotion_analysis_enabled = True  # Auto-enable for lightweight liveness detection
         
         # Initialize missing attributes
         self.confidence_buffer = []
@@ -460,6 +461,13 @@ class AttendanceSystemGUI:
         self.TRACKER_TIMEOUT_FRAMES = 10  # Remove tracker after N frames without detection
         
         # Synchronous blink detection (no threading needed)
+        self.face_mesh = face_mesh_detector  # MediaPipe Face Mesh for landmarks
+        self.current_landmarks = None  # Store landmarks for blink detection
+        
+        # Initialize lightweight blink detector and liveness system
+        self.blink_detector = BlinkDetector()
+        self.verification_start_time = None
+        self.lightweight_liveness = True  # Default to lightweight mode
         
         # Spoof detection state tracking
         self.last_spoof_detection_time = 0
@@ -794,6 +802,29 @@ class AttendanceSystemGUI:
         #                              command=self.enable_blink_detection, state=tk.DISABLED, width=20)
         # self.blink_button.pack(side=tk.LEFT, padx=10)
 
+        # Lightweight detection toggle
+        toggle_frame = tk.Frame(controls_frame, bg='#f0f0f0')
+        toggle_frame.pack(fill=tk.X, pady=5)
+        
+        self.lightweight_var = tk.BooleanVar(value=True)  # Default to lightweight
+        self.lightweight_checkbox = ttk.Checkbutton(
+            toggle_frame, 
+            text="⚡ Lightweight Liveness (Blink-only, 30+ FPS)", 
+            variable=self.lightweight_var,
+            command=self.toggle_liveness_mode
+        )
+        self.lightweight_checkbox.pack(side=tk.LEFT, padx=10)
+        
+        # Status label for detection mode
+        self.detection_mode_label = tk.Label(
+            toggle_frame, 
+            text="Mode: Lightweight (Recommended)", 
+            font=('Arial', 9, 'italic'),
+            fg='green',
+            bg='#f0f0f0'
+        )
+        self.detection_mode_label.pack(side=tk.LEFT, padx=10)
+
         # 3. Hidden components (to prevent logic errors in existing update methods)
         # These are created but NOT packed into the visible UI
         self._setup_hidden_components()
@@ -1003,6 +1034,30 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         print("[ERROR] Failed to open any camera")
         return None
+
+    def toggle_liveness_mode(self):
+        """Toggle between lightweight and heavy liveness detection"""
+        self.lightweight_liveness = self.lightweight_var.get()
+        
+        if self.lightweight_liveness:
+            mode_text = "Mode: Lightweight (Recommended)"
+            mode_color = "green"
+            print("[LIVENESS] Switched to LIGHTWEIGHT mode (blink-only, high performance)")
+        else:
+            mode_text = "Mode: Heavy (Multi-method analysis, slower)"
+            mode_color = "orange"
+            print("[LIVENESS] Switched to HEAVY mode (texture+color+blink analysis, lower performance)")
+        
+        self.detection_mode_label.config(text=mode_text, fg=mode_color)
+        
+        # Reset verification timer when switching modes
+        self.verification_start_time = None
+        if hasattr(self, 'blink_detector') and self.blink_detector:
+            try:
+                self.blink_detector.reset()
+                print(f"[LIVENESS] Blink detector reset for {mode_text}")
+            except Exception as e:
+                print(f"[LIVENESS] Could not reset blink detector: {e}")
 
     def enable_blink_detection(self):
         """Safely enable blink detection after camera stabilizes"""
@@ -1714,20 +1769,99 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         # Emotion and Liveness Analysis (FIXED - thread-safe)
                         if self.emotion_analysis_enabled and (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0):
                             try:
-                                print(f"[EMOTION+LIVENESS] Frame {self.frame_count}: Running analysis")
+                                # Initialize default values
+                                emotion = 'Neutral'
+                                is_live = False
+                                liveness_confidence = 0.0
+                                liveness_details = {'error': 'No analysis performed'}
                                 
-                                # Use the integrated emotion+liveness system
-                                from src.emotion import analyze_emotion_and_liveness
-                                
-                                # Run analysis (this handles blink detection internally)
-                                emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
-                                    cropped_face_resized, face_landmarks
-                                )
+                                if self.lightweight_liveness:
+                                    # LIGHTWEIGHT: Blink-only detection (like test_liveness_simple.py)
+                                    print(f"[LIGHTWEIGHT-LIVENESS] Frame {self.frame_count}: Running blink-only analysis")
+                                    print(f"[LIGHTWEIGHT-LIVENESS] Has landmarks: {face_landmarks is not None}")
+                                    print(f"[LIGHTWEIGHT-LIVENESS] Has blink_detector: {hasattr(self, 'blink_detector')}")
+                                    
+                                    # Initialize verification timer
+                                    if self.verification_start_time is None:
+                                        self.verification_start_time = time.time()
+                                    
+                                    current_time = time.time()
+                                    
+                                    # Simple blink detection
+                                    if face_landmarks is not None:
+                                        try:
+                                            blink_detected, current_ear, total_blinks = self.blink_detector.detect_blink(face_landmarks)
+                                            has_blinked, blinks_needed = self.blink_detector.requires_blink(
+                                                self.verification_start_time, current_time, min_blinks=1
+                                            )
+                                            
+                                            elapsed = current_time - self.verification_start_time
+                                            
+                                            # Simple liveness decision (like test_liveness_simple.py)
+                                            if has_blinked:
+                                                is_live = TrueF
+                                                liveness_confidence = 0.95
+                                                emotion = 'Neutral'  # Skip emotion analysis for performance
+                                            elif elapsed < 3.0:
+                                                is_live = None  # Still waiting
+                                                liveness_confidence = 0.5
+                                                emotion = 'Neutral'
+                                            else:
+                                                is_live = False  # No blinks detected
+                                                liveness_confidence = 0.1
+                                                emotion = 'Neutral'
+                                            
+                                            # Create lightweight liveness details
+                                            liveness_details = {
+                                                'method': 'lightweight_blink_only',
+                                                'blink': {
+                                                    'current_ear': current_ear,
+                                                    'total_blinks': total_blinks,
+                                                    'has_blinked': has_blinked,
+                                                    'blinks_needed': blinks_needed,
+                                                    'elapsed_time': elapsed
+                                                }
+                                            }
+                                            
+                                            if blink_detected:
+                                                print(f"[BLINK DETECTED] Total: {total_blinks}, EAR: {current_ear:.3f}")
+                                                
+                                        except Exception as blink_error:
+                                            print(f"[BLINK ERROR] {blink_error}")
+                                            # Use safe defaults on blink detection error
+                                            is_live = False
+                                            liveness_confidence = 0.0
+                                            current_ear = 0.0
+                                            total_blinks = 0
+                                            liveness_details = {'error': f'Blink detection failed: {blink_error}'}
+                                    else:
+                                        # No landmarks available
+                                        is_live = False
+                                        liveness_confidence = 0.0
+                                        emotion = 'Neutral'
+                                        current_ear = 0.0
+                                        total_blinks = 0
+                                        liveness_details = {'error': 'No landmarks available'}
+                                else:
+                                    # ORIGINAL: Heavy emotion+liveness analysis (fallback)
+                                    print(f"[HEAVY-LIVENESS] Frame {self.frame_count}: Running full analysis")
+                                    
+                                    from src.emotion import analyze_emotion_and_liveness
+                                    emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
+                                        cropped_face_resized, face_landmarks
+                                    )
                                 
                                 # Thread-safe update of liveness state
                                 with self.liveness_state_lock:
                                     self.last_emotion = emotion
-                                    self.last_liveness = 'Real' if is_live else 'Spoof'
+                                    # Handle waiting state (None) properly
+                                    if is_live is True:
+                                        self.last_liveness = 'Real'
+                                    elif is_live is False:
+                                        self.last_liveness = 'Spoof'
+                                    else:  # is_live is None (waiting for blink)
+                                        self.last_liveness = 'Waiting'
+                                    
                                     self.last_liveness_confidence = liveness_confidence
                                     
                                     # Extract and store EAR data if available
