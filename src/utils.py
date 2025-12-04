@@ -12,17 +12,17 @@ mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 face_detector_mp = mp_face_detection.FaceDetection(
     model_selection=0,  # 0 for close-range (< 2m), 1 for full-range
-    min_detection_confidence=0.5
+    min_detection_confidence=0.4  # Lowered from 0.5 to 0.4 for better multi-face detection
 )
 
 # Initialize MediaPipe Face Mesh for pose estimation
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh_detector = mp_face_mesh.FaceMesh(
     static_image_mode=False,
-    max_num_faces=1,
+    max_num_faces=4,  # Increased from 1 to 4 to handle multiple people
     refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+    min_detection_confidence=0.4,  # Lowered from 0.5 to 0.4
+    min_tracking_confidence=0.4   # Lowered from 0.5 to 0.4
 )
 
 # Note: Haar cascade fallback removed — MediaPipe-only detector

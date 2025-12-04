@@ -41,7 +41,7 @@ RANDOM_SEED = 42
 
 # ============= Verification Settings =============
 OPTIMAL_THRESHOLD = 1.15  # for notebook evaluation
-OPTIMAL_THRESHOLD_GUI = 1.0  # for GUI (more lenient for demos)
+OPTIMAL_THRESHOLD_GUI = 1.1  # for GUI - optimized based on verification analysis (was 0.8)
 
 # ============= GUI Settings =============
 PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames
@@ -96,8 +96,8 @@ ATTENDANCE_LOG_PATH = OUTPUT_DIR / "attendance_log.csv"
 PRIMARY_FACE_AREA_WEIGHT = 0.6  # weight for face area in primary selection
 PRIMARY_FACE_CENTER_WEIGHT = 0.4  # weight for centeredness in primary selection
 MAX_CONCURRENT_FACES = 4  # maximum number of faces to process simultaneously
-CONFIDENCE_REJECTION_THRESHOLD = 0.1  # minimum confidence to accept recognition (0-1) - lowered for better stability
-UNRECOGNIZED_DISTANCE_MULTIPLIER = 1.1  # slightly stricter threshold for small databases - reduced for stability
+CONFIDENCE_REJECTION_THRESHOLD = 0.05  # minimum confidence to accept recognition - lowered to 5% based on analysis
+UNRECOGNIZED_DISTANCE_MULTIPLIER = 1.2  # stricter threshold for small databases to prevent identity mix-ups
 
 # ============= Feature Flags =============
 USE_MULTI_EMBEDDING = True  # use multi-embedding matching for verification

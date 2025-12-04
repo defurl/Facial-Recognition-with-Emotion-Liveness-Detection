@@ -451,7 +451,13 @@ class AttendanceSystemGUI:
         
         # Recognition smoothing to reduce flickering
         self.recognition_history = []  # Store last N recognition results
-        self.SMOOTHING_WINDOW = 3  # Number of frames to consider for smoothing
+        self.SMOOTHING_WINDOW = 7  # Increased from 3 to 7 for better stability
+        
+        # Face tracking for consistent identity assignment
+        self.face_trackers = {}  # Track face positions across frames
+        self.next_face_id = 0
+        self.TRACKING_DISTANCE_THRESHOLD = 100  # Max distance to consider same face
+        self.TRACKER_TIMEOUT_FRAMES = 10  # Remove tracker after N frames without detection
         
         # Synchronous blink detection (no threading needed)
         
@@ -510,6 +516,84 @@ class AttendanceSystemGUI:
         }
         
         self.setup_ui()
+
+    def update_face_tracking(self, face_positions):
+        """Update face tracking to maintain consistent IDs across frames."""
+        current_time = time.time()
+        
+        # Clean up expired trackers
+        expired_ids = []
+        for face_id, tracker in self.face_trackers.items():
+            if current_time - tracker['last_seen'] > self.TRACKER_TIMEOUT_FRAMES / 30.0:  # Assuming 30fps
+                expired_ids.append(face_id)
+        
+        for face_id in expired_ids:
+            del self.face_trackers[face_id]
+        
+        # Calculate center positions for detected faces
+        detected_centers = []
+        for i, (x, y, w, h) in enumerate(face_positions):
+            center_x = x + w // 2
+            center_y = y + h // 2
+            detected_centers.append((center_x, center_y))
+        
+        # Assign consistent IDs to detected faces
+        face_assignments = {}
+        unassigned_faces = list(range(len(detected_centers)))
+        
+        # First pass: match to existing trackers
+        for face_id, tracker in list(self.face_trackers.items()):
+            best_match = None
+            best_distance = float('inf')
+            
+            for i in unassigned_faces:
+                distance = ((detected_centers[i][0] - tracker['center'][0]) ** 2 + 
+                           (detected_centers[i][1] - tracker['center'][1]) ** 2) ** 0.5
+                
+                if distance < self.TRACKING_DISTANCE_THRESHOLD and distance < best_distance:
+                    best_match = i
+                    best_distance = distance
+            
+            if best_match is not None:
+                # Update existing tracker
+                self.face_trackers[face_id]['center'] = detected_centers[best_match]
+                self.face_trackers[face_id]['last_seen'] = current_time
+                face_assignments[best_match] = face_id
+                unassigned_faces.remove(best_match)
+        
+        # Second pass: create new trackers for unassigned faces
+        for i in unassigned_faces:
+            face_id = self.next_face_id
+            self.next_face_id += 1
+            
+            self.face_trackers[face_id] = {
+                'center': detected_centers[i],
+                'last_seen': current_time,
+                'recognition_history': []
+            }
+            face_assignments[i] = face_id
+        
+        return face_assignments
+    
+    def get_face_recognition_history(self, face_id):
+        """Get recognition history for a specific face ID."""
+        if face_id in self.face_trackers:
+            return self.face_trackers[face_id]['recognition_history']
+        return []
+    
+    def update_face_recognition(self, face_id, identity, confidence):
+        """Update recognition result for a specific face ID."""
+        if face_id in self.face_trackers:
+            history = self.face_trackers[face_id]['recognition_history']
+            history.append({
+                'identity': identity,
+                'confidence': confidence,
+                'timestamp': time.time()
+            })
+            
+            # Keep only recent history
+            if len(history) > self.SMOOTHING_WINDOW:
+                history.pop(0)
         
     def setup_styles(self):
         """Setup dark theme TTK styles with high contrast for professional xAI display"""
@@ -656,7 +740,7 @@ class AttendanceSystemGUI:
         crud_container.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Button(crud_container, text="View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(crud_container, text="View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 5))
+        # ttk.Button(crud_container, text="View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(crud_container, text="Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(crud_container, text="Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X)
 
@@ -1526,8 +1610,11 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             faces = detect_faces(frame)
             detect_time = (time.time() - detect_start) * 1000
             
+            # Update face tracking for consistent identity assignment
+            face_assignments = self.update_face_tracking(faces)
+            
             if self.frame_count % 30 == 0:
-                print(f"[LEGACY] Face Detection: {detect_time:.2f}ms | Faces: {len(faces)}")
+                print(f"[LEGACY] Face Detection: {detect_time:.2f}ms | Faces: {len(faces)} | Tracked: {len(self.face_trackers)}")
             
             h, w = frame.shape[:2]
             self.multiple_faces_warning = len(faces) > MAX_CONCURRENT_FACES
@@ -1536,10 +1623,16 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             # Debug: Log multi-face processing when multiple faces detected
             if len(faces) > 1 and self.frame_count % 30 == 0:
                 print(f"[MULTI-FACE] Processing {len(faces_to_process)} out of {len(faces)} detected faces")
+                for i, (fx, fy, fw, fh) in enumerate(faces):
+                    face_id = face_assignments.get(i, -1)
+                    print(f"  Face {i} (ID:{face_id}): bbox=({fx}, {fy}, {fw}, {fh}) center=({fx + fw//2}, {fy + fh//2}) area={fw*fh}")
+            elif len(faces) == 0 and self.frame_count % 60 == 0:  # Less frequent for no faces
+                print(f"[FACE-DETECT] No faces detected at frame {self.frame_count}")
 
             for face_idx, (x, y, w, h) in enumerate(faces_to_process):
                 is_processing_face = face_idx < MAX_CONCURRENT_FACES
                 box_color = (0, 255, 0)  # Green for all processed faces
+                current_face_id = face_assignments.get(face_idx, -1)  # Get tracked face ID
 
                 # Skip verification during registration mode - always show as unregistered
                 if self.registration_mode:
@@ -1566,21 +1659,48 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         landmarks_results = face_mesh_detector.process(frame_rgb)
                         face_landmarks = None
+                        
                         if landmarks_results and landmarks_results.multi_face_landmarks:
-                            # Use the first detected face (should be the same as our detected face)
-                            face_landmarks = landmarks_results.multi_face_landmarks[0]
-                            if self.frame_count % 30 == 0:
-                                print(f"[LANDMARKS] ✓ Detected {len(face_landmarks.landmark)} landmarks on full frame")
-                        else:
-                            # Fallback: try on cropped face
+                            # Find the landmark set that corresponds to our current face
+                            best_landmark_match = None
+                            best_distance = float('inf')
+                            
+                            # Calculate center of our detected face
+                            face_center_x = x + w // 2
+                            face_center_y = y + h // 2
+                            
+                            for landmark_set in landmarks_results.multi_face_landmarks:
+                                # Calculate center of this landmark set
+                                nose_landmark = landmark_set.landmark[1]  # Nose tip landmark
+                                landmark_center_x = int(nose_landmark.x * frame.shape[1])
+                                landmark_center_y = int(nose_landmark.y * frame.shape[0])
+                                
+                                # Calculate distance between centers
+                                distance = ((face_center_x - landmark_center_x) ** 2 + 
+                                          (face_center_y - landmark_center_y) ** 2) ** 0.5
+                                
+                                if distance < best_distance:
+                                    best_distance = distance
+                                    best_landmark_match = landmark_set
+                            
+                            # Use the closest landmark set if it's reasonable close
+                            if best_landmark_match and best_distance < max(w, h):  # Within face size
+                                face_landmarks = best_landmark_match
+                                if self.frame_count % 30 == 0:
+                                    print(f"[LANDMARKS] ✓ Matched landmarks to face {face_idx} (distance: {best_distance:.1f})")
+                            elif self.frame_count % 30 == 0:
+                                print(f"[LANDMARKS] ✗ No close landmark match for face {face_idx} (best distance: {best_distance:.1f})")
+                        
+                        # Fallback: try on cropped face if no landmarks found
+                        if face_landmarks is None:
                             rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
                             landmarks_results = face_mesh_detector.process(rgb_face)
                             if landmarks_results and landmarks_results.multi_face_landmarks:
                                 face_landmarks = landmarks_results.multi_face_landmarks[0]
                                 if self.frame_count % 30 == 0:
-                                    print(f"[LANDMARKS] ✓ Detected landmarks on cropped face (fallback)")
+                                    print(f"[LANDMARKS] ✓ Detected landmarks on cropped face {face_idx} (fallback)")
                             elif self.frame_count % 30 == 0:
-                                print(f"[LANDMARKS] ✗ FAILED to detect landmarks (crop size: {cropped_face.shape})")
+                                print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
 
                         # Emotion and Liveness Analysis (FIXED - thread-safe)
                         if self.emotion_analysis_enabled and (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0):
@@ -1718,6 +1838,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
                                         print(f"    [SMALL DB] Using stricter threshold: {adjusted_threshold:.4f}")
                                     
+                                    # Note: Removed multi-face strictness to prevent excessive false rejections
+                                    # The system now relies on confidence thresholds and smoothing for stability
+                                    
                                     # Determine identity with confidence-based rejection
                                     if confidence < CONFIDENCE_REJECTION_THRESHOLD * 100:
                                         raw_identity = "Not Registered (Low Confidence)"
@@ -1727,35 +1850,58 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     else:
                                         raw_identity = "Not Registered"
                                     
-                                    # Apply recognition smoothing to reduce flickering
-                                    if face_idx == 0:  # Only smooth primary face
-                                        self.recognition_history.append(raw_identity)
+                                    # Update face-specific recognition tracking
+                                    if current_face_id >= 0:
+                                        self.update_face_recognition(current_face_id, raw_identity, confidence)
+                                        face_history = self.get_face_recognition_history(current_face_id)
+                                    else:
+                                        face_history = []
+                                    
+                                    # Apply face-specific recognition smoothing
+                                    frame_identity = raw_identity
+                                    if len(face_history) >= 2:
+                                        # Face-specific smoothing with confidence weighting
+                                        identity_scores = {}
+                                        for result in face_history:
+                                            hist_id = result['identity']
+                                            hist_conf = result['confidence']
+                                            
+                                            # Weight by confidence, prefer recognized identities
+                                            weight = hist_conf / 100.0
+                                            if hist_id != "Not Registered" and "Low Confidence" not in hist_id:
+                                                weight *= 1.3  # Boost recognized identities
+                                            
+                                            if hist_id not in identity_scores:
+                                                identity_scores[hist_id] = {'weight': 0, 'count': 0}
+                                            identity_scores[hist_id]['weight'] += weight
+                                            identity_scores[hist_id]['count'] += 1
+                                        
+                                        # Choose best identity for this specific face
+                                        best_identity = None
+                                        best_score = 0
+                                        for identity, data in identity_scores.items():
+                                            avg_confidence = (data['weight'] / data['count']) * 100
+                                            # More lenient for tracked faces
+                                            if data['count'] >= 2 or avg_confidence > 75:
+                                            # More lenient for tracked faces
+                                                if data['weight'] > best_score:
+                                                    best_score = data['weight']
+                                                    best_identity = identity
+                                        
+                                        # Use tracked identity if strong enough
+                                        if best_identity and best_identity not in ["Not Registered", "Not Registered (Low Confidence)"]:
+                                            frame_identity = best_identity
+                                            print(f"[TRACKING] Face {current_face_id}: Using tracked identity '{best_identity}' (score: {best_score:.2f})")
+                                    
+                                    # Fallback to global smoothing for primary face only (backwards compatibility)
+                                    if face_idx == 0 and frame_identity == raw_identity:
+                                        self.recognition_history.append((raw_identity, confidence))
                                         if len(self.recognition_history) > self.SMOOTHING_WINDOW:
                                             self.recognition_history.pop(0)
-                                        
-                                        # Use majority vote from recent history
-                                        if len(self.recognition_history) >= 2:
-                                            # Count occurrences
-                                            identity_counts = {}
-                                            for hist_id in self.recognition_history:
-                                                identity_counts[hist_id] = identity_counts.get(hist_id, 0) + 1
-                                            
-                                            # Use most frequent identity, but prefer recognized faces
-                                            most_common = max(identity_counts.items(), key=lambda x: x[1])
-                                            if most_common[1] >= 2 or len(self.recognition_history) < self.SMOOTHING_WINDOW:
-                                                frame_identity = most_common[0]
-                                            else:
-                                                frame_identity = raw_identity
-                                        else:
-                                            frame_identity = raw_identity
-                                    else:
-                                        frame_identity = raw_identity
                                     
                                     # ========== IDENTITY LOCK SYSTEM FOR SEAMLESS CHECK-IN ==========
                                     current_time = time.time()
-                                    print(f"[LOCK] Face {face_idx}: raw_identity='{raw_identity}', frame_identity='{frame_identity}', confidence={confidence:.1f}%")
-                                    
-                                    # Store face-specific identity (for multi-face support)
+                                    print(f"[LOCK] Face {face_idx} (ID:{current_face_id}): raw='{raw_identity}', final='{frame_identity}', confidence={confidence:.1f}%")                                    # Store face-specific identity (for multi-face support)
                                     if face_idx == 0:  # Only use lock system for first face
                                         print(f"[LOCK] Processing primary face for identity lock")
                                         # Check if we have a locked identity
