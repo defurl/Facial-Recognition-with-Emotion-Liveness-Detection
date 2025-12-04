@@ -376,31 +376,9 @@ class AttendanceSystemGUI:
         self.window.bind('<Escape>', lambda e: self.window.attributes('-fullscreen', False))
         self.fullscreen = False
         
-        # Configure styles
-        self.setup_styles()
-        
-        # Performance monitoring
-        self.performance_monitor = PerformanceMonitor()
-        self.async_processor = None
-        self.vectorized_knn = None
-        
-        # Video capture
+        # Core state
         self.cap = None
-        self.running = False
-        
-        # Processing control - optimized for performance
-        self.frame_count = 0
-        self.PROCESS_EVERY_N_FRAMES = max(5, PROCESS_EVERY_N_FRAMES)  # Process every 5 frames for more responsive recognition
-        self.EMOTION_EVERY_N_FRAMES = 5  # Process emotion/liveness every 5 frames (~0.17s) for responsive blink detection
-        self.last_processed_frame = 0  # Track last processed frame time
-        self.last_emotion = "Neutral"
-        self.last_liveness = "Real"
-        self.last_liveness_confidence = 0.0  # Liveness detection confidence (0-1)
-        self.last_identity = "Not Registered"
-        self.last_distance = float('inf')
-        self.last_confidence = 0.0  # Phase 7: Confidence percentage
-        self.matched_pose_index = -1  # Phase 7: Which pose matched
-        self.multiple_faces_warning = False
+        self.running = Falsewarning = False
         
         # Multi-face tracking for concurrent processing
         self.face_identities = []  # Store identity for each processed face
@@ -1777,18 +1755,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 
                                 if self.lightweight_liveness:
                                     # LIGHTWEIGHT: Blink-only detection (like test_liveness_simple.py)
-                                    print(f"[LIGHTWEIGHT-LIVENESS] Frame {self.frame_count}: Running blink-only analysis")
-                                    print(f"[LIGHTWEIGHT-LIVENESS] Has landmarks: {face_landmarks is not None}")
-                                    print(f"[LIGHTWEIGHT-LIVENESS] Has blink_detector: {hasattr(self, 'blink_detector')}")
                                     
                                     # Initialize verification timer
                                     if self.verification_start_time is None:
                                         self.verification_start_time = time.time()
-                                        print(f"[LIVENESS] Starting new verification cycle at {self.verification_start_time:.2f}")
                                         # Ensure clean blink detection state for new verification
                                         if hasattr(self, 'blink_detector') and self.blink_detector:
                                             self.blink_detector.reset()
-                                            print("[LIVENESS] Blink detector reset for new verification cycle")
                                     
                                     current_time = time.time()
                                     
@@ -1811,10 +1784,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                 is_live = None  # Still waiting
                                                 liveness_confidence = 0.5
                                                 emotion = 'Neutral'
-                                                print(f"[LIVENESS] Waiting for blink... ({elapsed:.1f}s/{min(5.0, 5.0)}s)")
                                             else:
                                                 # Timeout - reset and allow retry
-                                                print(f"[LIVENESS] Blink verification timeout ({elapsed:.1f}s) - resetting for retry")
                                                 self.verification_start_time = time.time()
                                                 if hasattr(self, 'blink_detector') and self.blink_detector:
                                                     self.blink_detector.reset()
@@ -1835,10 +1806,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             }
                                             
                                             if blink_detected:
-                                                print(f"[BLINK DETECTED] Total: {total_blinks}, EAR: {current_ear:.3f}")
+                                                pass  # Blink detected - continue processing
                                                 
                                         except Exception as blink_error:
-                                            print(f"[BLINK ERROR] {blink_error}")
                                             # Use safe defaults on blink detection error
                                             is_live = False
                                             liveness_confidence = 0.0
@@ -1855,7 +1825,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         liveness_details = {'error': 'No landmarks available'}
                                 else:
                                     # ORIGINAL: Heavy emotion+liveness analysis (fallback)
-                                    print(f"[HEAVY-LIVENESS] Frame {self.frame_count}: Running full analysis")
                                     
                                     from src.emotion import analyze_emotion_and_liveness
                                     emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
@@ -1914,7 +1883,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 time_since_detection = current_time - self.last_spoof_detection_time
                                 if time_since_detection > self.SPOOF_WARNING_DISPLAY_TIME:
                                     # Reset to allow re-verification
-                                    print("[LIVENESS] Spoof warning displayed for 2s - resetting for re-verification")
                                     self.last_liveness = 'Real'
                                     self.last_liveness_confidence = 0.0
                                     self.spoof_warning_shown = False
@@ -1923,7 +1891,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         self.blink_detector.reset()
                                     from src.emotion import reset_liveness_detector
                                     reset_liveness_detector()
-                                    print("[RESET] Blink detection state reset after spoof recovery")
                             
                             is_live = (self.last_liveness == 'Real')
                             liveness_status = self.last_liveness
@@ -1936,7 +1903,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 if not self.spoof_warning_shown:
                                     self.last_spoof_detection_time = current_time
                                     self.spoof_warning_shown = True
-                                    print(f"[SPOOF] Blocking verification - {liveness_status} detected. Showing warning for 2s...")
                             # Don't process verification for spoof, but don't freeze either
                         else:
                             # Verification with multi-embedding support
@@ -1988,7 +1954,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                                     confidence = max(0, min(100, (1 - min_distance / threshold) * 100))
                                     
-                                    print(f"    [RESULT] Face {face_idx}: Best Match: {best_match or 'None'} | Distance: {min_distance:.4f} | Threshold: {threshold:.4f} | Confidence: {confidence:.1f}%")
+                                    # Only log final result for main face identification
+                                    if face_idx == 0:
+                                        print(f"Face {face_idx}: {best_match or 'None'} | Distance: {min_distance:.3f} | Confidence: {confidence:.0f}%")
                                     
                                     # Enhanced rejection logic for small databases
                                     adjusted_threshold = current_threshold
@@ -2002,7 +1970,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Determine identity with confidence-based rejection
                                     if confidence < CONFIDENCE_REJECTION_THRESHOLD * 100:
                                         raw_identity = "Not Registered (Low Confidence)"
-                                        print(f"    [REJECTED] Confidence {confidence:.1f}% below threshold {CONFIDENCE_REJECTION_THRESHOLD*100:.1f}%")
+                                        # Only log rejections for primary face
+                                        if face_idx == 0:
+                                            print(f"Rejected: Low confidence ({confidence:.0f}%)")
                                     elif min_distance < adjusted_threshold:
                                         raw_identity = best_match
                                     else:
@@ -2059,14 +2029,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     
                                     # ========== IDENTITY LOCK SYSTEM FOR SEAMLESS CHECK-IN ==========
                                     current_time = time.time()
-                                    print(f"[LOCK] Face {face_idx} (ID:{current_face_id}): raw='{raw_identity}', final='{frame_identity}', confidence={confidence:.1f}%")                                    # Store face-specific identity (for multi-face support)
+                                    # Store face-specific identity (for multi-face support)
                                     if face_idx == 0:  # Only use lock system for first face
-                                        print(f"[LOCK] Processing primary face for identity lock")
                                         # Check if we have a locked identity
                                         if self.locked_identity is not None:
                                             # Check if lock display time has expired
                                             if current_time - self.lock_timestamp > self.LOCK_DISPLAY_TIME:
-                                                print(f"[LOCK] Auto-resetting after {self.LOCK_DISPLAY_TIME}s display")
+                                                # Auto-reset after display timeout
                                                 self.locked_identity = None
                                                 self.identity_lock_buffer = []
                                                 self.last_identity = "Not Registered"
@@ -2079,7 +2048,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                 self.last_liveness = 'Unknown'
                                                 self.last_liveness_confidence = 0.0
                                                 self.spoof_warning_shown = False
-                                                print("[RESET] All verification state reset for next person")
                                             else:
                                                 # Keep showing locked identity
                                                 self.last_identity = self.locked_identity
@@ -2089,13 +2057,11 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             if raw_identity not in ["Not Registered", "Not Registered (Low Confidence)", "Processing...", "Error"]:
                                                 # Add to buffer
                                                 self.identity_lock_buffer.append((current_time, raw_identity, confidence))
-                                                print(f"[LOCK] Added verification: {raw_identity} (conf: {confidence:.1f}%)")
                                             else:
                                                 # No face recognized - clear buffer if it's been too long
                                                 if self.identity_lock_buffer:
                                                     oldest_time = min(t for t, _, _ in self.identity_lock_buffer)
                                                     if current_time - oldest_time > self.LOCK_DURATION:
-                                                        print(f"[LOCK] Clearing buffer - too old ({current_time - oldest_time:.1f}s > {self.LOCK_DURATION}s)")
                                                         self.identity_lock_buffer = []
                                             
                                             # Remove old entries (older than LOCK_DURATION)
@@ -2213,7 +2179,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     
                                     # ========== TOTAL TIMING ==========
                                     total_process_time = (time.time() - process_start) * 1000
-                                    print(f"  [TIMING] *** TOTAL PROCESSING TIME: {total_process_time:.2f}ms ***\n")
+                                    # Only log slow processing times
+                                    if total_process_time > 100:  # Log only if > 100ms
+                                        print(f"  Processing time: {total_process_time:.0f}ms")
                             except Exception as e:
                                 print(f"Verification error: {e}")
                                 self.last_identity = "Error"
