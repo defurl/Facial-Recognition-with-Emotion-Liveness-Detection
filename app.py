@@ -1784,6 +1784,11 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Initialize verification timer
                                     if self.verification_start_time is None:
                                         self.verification_start_time = time.time()
+                                        print(f"[LIVENESS] Starting new verification cycle at {self.verification_start_time:.2f}")
+                                        # Ensure clean blink detection state for new verification
+                                        if hasattr(self, 'blink_detector') and self.blink_detector:
+                                            self.blink_detector.reset()
+                                            print("[LIVENESS] Blink detector reset for new verification cycle")
                                     
                                     current_time = time.time()
                                     
@@ -1799,15 +1804,21 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             
                                             # Simple liveness decision (like test_liveness_simple.py)
                                             if has_blinked:
-                                                is_live = TrueF
+                                                is_live = True
                                                 liveness_confidence = 0.95
                                                 emotion = 'Neutral'  # Skip emotion analysis for performance
-                                            elif elapsed < 3.0:
+                                            elif elapsed < 5.0:  # Extended timeout for better UX
                                                 is_live = None  # Still waiting
                                                 liveness_confidence = 0.5
                                                 emotion = 'Neutral'
+                                                print(f"[LIVENESS] Waiting for blink... ({elapsed:.1f}s/{min(5.0, 5.0)}s)")
                                             else:
-                                                is_live = False  # No blinks detected
+                                                # Timeout - reset and allow retry
+                                                print(f"[LIVENESS] Blink verification timeout ({elapsed:.1f}s) - resetting for retry")
+                                                self.verification_start_time = time.time()
+                                                if hasattr(self, 'blink_detector') and self.blink_detector:
+                                                    self.blink_detector.reset()
+                                                is_live = False  # Failed verification
                                                 liveness_confidence = 0.1
                                                 emotion = 'Neutral'
                                             
@@ -1907,15 +1918,19 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     self.last_liveness = 'Real'
                                     self.last_liveness_confidence = 0.0
                                     self.spoof_warning_shown = False
+                                    self.verification_start_time = None  # Reset verification timer
+                                    if hasattr(self, 'blink_detector') and self.blink_detector:
+                                        self.blink_detector.reset()
                                     from src.emotion import reset_liveness_detector
                                     reset_liveness_detector()
+                                    print("[RESET] Blink detection state reset after spoof recovery")
                             
                             is_live = (self.last_liveness == 'Real')
                             liveness_status = self.last_liveness
 
                         # Check for spoof (thread-safe)
                         if not is_live:
-                            self.last_identity = f"⚠️ SPOOF - {liveness_status}"
+                            self.last_identity = f"SPOOF - {liveness_status}"
                             box_color = (0, 0, 255)
                             with self.liveness_state_lock:
                                 if not self.spoof_warning_shown:
@@ -2055,8 +2070,16 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                 self.locked_identity = None
                                                 self.identity_lock_buffer = []
                                                 self.last_identity = "Not Registered"
-                                                # Reset liveness detector for next verification
+                                                # Reset liveness detector and blink state for next verification
                                                 reset_liveness_detector()
+                                                self.verification_start_time = None
+                                                if hasattr(self, 'blink_detector') and self.blink_detector:
+                                                    self.blink_detector.reset()
+                                                # Reset spoof detection state
+                                                self.last_liveness = 'Unknown'
+                                                self.last_liveness_confidence = 0.0
+                                                self.spoof_warning_shown = False
+                                                print("[RESET] All verification state reset for next person")
                                             else:
                                                 # Keep showing locked identity
                                                 self.last_identity = self.locked_identity
@@ -3324,10 +3347,10 @@ Quality Assessment:
                     ear_text += ", ".join([f"{ear:.2f}" for ear in recent_ears])
                     
                     # Add blink status
-                    if current_ear < 0.5:
-                        ear_text += "\n\nSTATUS: EYES CLOSED (EAR < 0.5)"
+                    if current_ear < 0.4:
+                        ear_text += "\n\nSTATUS: EYES CLOSED (EAR < 0.4)"
                     else:
-                        ear_text += "\n\nSTATUS: Eyes open (EAR > 0.5)"
+                        ear_text += "\n\nSTATUS: Eyes open (EAR > 0.4)"
                     
                     # Update text widget
                     self.ear_debug_text.delete(1.0, tk.END)
