@@ -6,6 +6,7 @@ Based on Eye Aspect Ratio (EAR) calculation from facial landmarks
 import numpy as np
 from collections import deque
 import time
+import threading
 
 
 class BlinkDetector:
@@ -44,12 +45,12 @@ class BlinkDetector:
         'bottom_2': 263   # p5 - bottom inner (reusing inner corner)
     }
     
-    def __init__(self, ear_threshold=0.21, history_size=30, min_blink_duration=0.08, max_blink_duration=0.4):
+    def __init__(self, ear_threshold=0.5, history_size=30, min_blink_duration=0.08, max_blink_duration=0.4):
         """
-        Initialize blink detector
+        Initialize blink detector with thread safety
         
         Args:
-            ear_threshold: EAR value below which eye is considered closed (default: 0.21)
+            ear_threshold: EAR value below which eye is considered closed (default: 0.5)
             history_size: Number of frames to track (default: 30, ~1 second at 30fps)
             min_blink_duration: Minimum blink duration in seconds (default: 0.08)
             max_blink_duration: Maximum blink duration in seconds (default: 0.4)
@@ -59,19 +60,25 @@ class BlinkDetector:
         self.min_blink_duration = min_blink_duration
         self.max_blink_duration = max_blink_duration
         
-        # History tracking
+        # Thread safety locks
+        self._state_lock = threading.RLock()  # Recursive lock for nested access
+        self._history_lock = threading.Lock()  # Separate lock for history data
+        
+        # History tracking (thread-safe)
         self.ear_history = deque(maxlen=history_size)
         self.timestamp_history = deque(maxlen=history_size)
-        self.blink_timestamps = []  # Track actual blink event times
+        self.blink_timestamps = deque(maxlen=100)  # FIX: Limit memory growth!
         
-        # Blink tracking
+        # Blink tracking (protected by state_lock)
         self.blink_count = 0
         self.last_blink_time = 0
         self.eye_closed_start = None
         self.consecutive_closed_frames = 0
         
-        # State
+        # State (protected by state_lock)
         self.is_eye_closed = False
+        
+        print(f"[BlinkDetector] Initialized with threshold={ear_threshold}, thread-safe")
         
     def calculate_ear(self, eye_landmarks):
         """
@@ -127,7 +134,7 @@ class BlinkDetector:
     
     def detect_blink(self, face_landmarks, timestamp=None):
         """
-        Detect blink from facial landmarks
+        Detect blink from facial landmarks (thread-safe)
         
         Args:
             face_landmarks: MediaPipe Face Mesh landmarks object (468 points)
@@ -139,25 +146,33 @@ class BlinkDetector:
         if timestamp is None:
             timestamp = time.time()
         
-        # Extract eye landmarks
-        left_eye = self.extract_eye_landmarks(face_landmarks, 'left')
-        right_eye = self.extract_eye_landmarks(face_landmarks, 'right')
-        
-        # Calculate EAR for both eyes
-        left_ear = self.calculate_ear(left_eye)
-        right_ear = self.calculate_ear(right_eye)
-        
-        # Average EAR
-        avg_ear = (left_ear + right_ear) / 2.0
-        
-        # Store in history
-        self.ear_history.append(avg_ear)
-        self.timestamp_history.append(timestamp)
-        
-        # Detect blink
-        blink_detected = self._process_ear_value(avg_ear, timestamp)
-        
-        return blink_detected, avg_ear, self.blink_count
+        try:
+            # Extract eye landmarks
+            left_eye = self.extract_eye_landmarks(face_landmarks, 'left')
+            right_eye = self.extract_eye_landmarks(face_landmarks, 'right')
+            
+            # Calculate EAR for both eyes
+            left_ear = self.calculate_ear(left_eye)
+            right_ear = self.calculate_ear(right_eye)
+            
+            # Average EAR
+            avg_ear = (left_ear + right_ear) / 2.0
+            
+            # Thread-safe history update
+            with self._history_lock:
+                self.ear_history.append(avg_ear)
+                self.timestamp_history.append(timestamp)
+            
+            # Thread-safe blink detection
+            with self._state_lock:
+                blink_detected = self._process_ear_value(avg_ear, timestamp)
+                current_blink_count = self.blink_count
+            
+            return blink_detected, avg_ear, current_blink_count
+            
+        except Exception as e:
+            print(f"[BlinkDetector ERROR] detect_blink failed: {e}")
+            return False, 0.0, 0
     
     def _process_ear_value(self, ear, timestamp):
         """
@@ -231,19 +246,27 @@ class BlinkDetector:
         return blinks_per_minute
     
     def reset(self):
-        """Reset detector state"""
-        self.ear_history.clear()
-        self.timestamp_history.clear()
-        self.blink_timestamps.clear()  # Clear blink events
-        self.blink_count = 0
-        self.last_blink_time = 0
-        self.eye_closed_start = None
-        self.consecutive_closed_frames = 0
-        self.is_eye_closed = False
+        """Reset detector state (thread-safe)"""
+        try:
+            with self._history_lock:
+                self.ear_history.clear()
+                self.timestamp_history.clear()
+                self.blink_timestamps.clear()  # Clear blink events
+            
+            with self._state_lock:
+                self.blink_count = 0
+                self.last_blink_time = 0
+                self.eye_closed_start = None
+                self.consecutive_closed_frames = 0
+                self.is_eye_closed = False
+            
+            print(f"[BlinkDetector] State reset successfully")
+        except Exception as e:
+            print(f"[BlinkDetector ERROR] Reset failed: {e}")
     
     def requires_blink(self, verification_start_time, current_time, min_blinks=1):
         """
-        Check if sufficient blinks detected during verification period
+        Check if sufficient blinks detected during verification period (thread-safe)
         
         Args:
             verification_start_time: When verification started
@@ -253,16 +276,21 @@ class BlinkDetector:
         Returns:
             tuple: (has_blinked: bool, blinks_needed: int)
         """
-        # Count ACTUAL BLINK EVENTS since verification started
-        blinks_in_period = sum(
-            1 for ts in self.blink_timestamps 
-            if ts >= verification_start_time
-        )
-        
-        has_blinked = blinks_in_period >= min_blinks
-        blinks_needed = max(0, min_blinks - blinks_in_period)
-        
-        return has_blinked, blinks_needed
+        try:
+            # Thread-safe access to blink timestamps
+            with self._history_lock:
+                blinks_in_period = sum(
+                    1 for ts in self.blink_timestamps 
+                    if ts >= verification_start_time
+                )
+            
+            has_blinked = blinks_in_period >= min_blinks
+            blinks_needed = max(0, min_blinks - blinks_in_period)
+            
+            return has_blinked, blinks_needed
+        except Exception as e:
+            print(f"[BlinkDetector ERROR] requires_blink failed: {e}")
+            return False, min_blinks
 
 
 def get_blink_detector():

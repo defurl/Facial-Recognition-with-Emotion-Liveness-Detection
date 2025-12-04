@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-from config import (
+from src.config import (
     IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD, BATCH_SIZE,
     TRAIN_DIR, VAL_DIR, MAX_IMAGES_PER_IDENTITY_TRAIN, VERIFICATION_VAL_PAIRS
 )

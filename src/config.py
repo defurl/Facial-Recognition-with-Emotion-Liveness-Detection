@@ -48,7 +48,7 @@ PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames
 TARGET_FPS = 30
 GUI_WINDOW_WIDTH = 640
 GUI_WINDOW_HEIGHT = 480
-CAMERA_INDEX = 1  # default camera index; app will fallback to others if unavailable
+CAMERA_INDEX = 0  # default camera index; app will fallback to others if unavailable
 
 # ============= Registration Settings =============
 REGISTRATION_MODE_FULL = 6  # number of captures for full registration
@@ -95,6 +95,9 @@ ATTENDANCE_LOG_PATH = OUTPUT_DIR / "attendance_log.csv"
 # ============= Multi-Face Settings =============
 PRIMARY_FACE_AREA_WEIGHT = 0.6  # weight for face area in primary selection
 PRIMARY_FACE_CENTER_WEIGHT = 0.4  # weight for centeredness in primary selection
+MAX_CONCURRENT_FACES = 4  # maximum number of faces to process simultaneously
+CONFIDENCE_REJECTION_THRESHOLD = 0.1  # minimum confidence to accept recognition (0-1) - lowered for better stability
+UNRECOGNIZED_DISTANCE_MULTIPLIER = 1.1  # slightly stricter threshold for small databases - reduced for stability
 
 # ============= Feature Flags =============
 USE_MULTI_EMBEDDING = True  # use multi-embedding matching for verification

@@ -7,6 +7,8 @@ Emotion Detection and Liveness Analysis Module
 from deepface import DeepFace
 import numpy as np
 import cv2
+import threading
+import time
 
 emotion_labels = {
     'angry': 'Angry',
@@ -18,20 +20,25 @@ emotion_labels = {
     'neutral': 'Neutral'
 }
 
-# Lazy load liveness detector
+# Thread-safe liveness detector with proper locking
 _liveness_detector = None
+_detector_lock = threading.Lock()
 
 def _get_liveness_detector():
-    """Lazy initialization of liveness detector with blink detection"""
+    """Thread-safe initialization of liveness detector with blink detection"""
     global _liveness_detector
     
+    # Double-checked locking pattern for thread safety
     if _liveness_detector is None:
-        print("[Liveness] Initializing multi-method liveness detector with eye blink detection")
-        try:
-            from .liveness import LivenessDetector
-        except ImportError:
-            from liveness import LivenessDetector
-        _liveness_detector = LivenessDetector()
+        with _detector_lock:
+            if _liveness_detector is None:  # Check again inside lock
+                print("[Liveness] Initializing multi-method liveness detector with eye blink detection")
+                try:
+                    from .liveness import LivenessDetector
+                except ImportError:
+                    from liveness import LivenessDetector
+                _liveness_detector = LivenessDetector()
+                print("[Liveness] ✓ Detector initialized successfully")
     
     return _liveness_detector
 
@@ -100,10 +107,15 @@ def analyze_emotion_and_liveness(face_image, landmarks=None):
 
 
 def reset_liveness_detector():
-    """Reset liveness detector state for new verification"""
+    """Reset liveness detector state for new verification (thread-safe)"""
     global _liveness_detector
-    if _liveness_detector is not None:
-        _liveness_detector.reset()
+    with _detector_lock:
+        if _liveness_detector is not None:
+            try:
+                _liveness_detector.reset()
+                print("[Liveness] Detector state reset")
+            except Exception as e:
+                print(f"[Liveness ERROR] Failed to reset detector: {e}")
 
 
 # Explicit exports
