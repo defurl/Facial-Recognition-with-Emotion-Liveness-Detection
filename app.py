@@ -37,6 +37,7 @@ import datetime
 import queue
 import threading
 import asyncio
+import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from PIL import Image, ImageTk, ImageDraw
@@ -880,8 +881,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         for idx in preferred_indices:
             cap = None
             try:
-                print(f"Trying camera {idx}...")
-                cap = cv2.VideoCapture(idx)
+                print(f"Trying camera {1}...")
+                cap = cv2.VideoCapture(1)
                 
                 if cap is None:
                     continue
@@ -1239,12 +1240,35 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 employee_db[self.registration_name] = self.registration_state['embeddings']
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
                 
+                # Save image copies of captured frames
+                identities_dir = Path("identities")
+                identities_dir.mkdir(exist_ok=True)
+                
+                # Create user-specific folder
+                user_dir = identities_dir / self.registration_name
+                user_dir.mkdir(exist_ok=True)
+                
+                # Save each captured frame as an image
+                for idx, frame in enumerate(self.registration_state['frames']):
+                    # Generate filename with frame number
+                    filename = f"frame_{idx+1:02d}.jpg"
+                    image_path = user_dir / filename
+                    
+                    # Save the frame as JPEG image
+                    success = cv2.imwrite(str(image_path), frame)
+                    if success:
+                        print(f"Saved frame {idx+1} to: {image_path}")
+                    else:
+                        print(f"Failed to save frame {idx+1} to: {image_path}")
+                
                 print(f"[OK] Registered '{self.registration_name}' with {len(self.registration_state['embeddings'])} poses")
+                print(f"[OK] Saved {len(self.registration_state['frames'])} images to: {user_dir}")
                 self.status_text.set(f"[OK] Registered '{self.registration_name}' successfully!")
-                messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!")
+                messagebox.showinfo("Success", f"Employee '{self.registration_name}' registered!\nImages saved to: identities/{self.registration_name}/")
                 dialog.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save: {e}")
+                print(f"Registration save error: {e}")
             finally:
                 self.registration_mode = False
                 self.registration_state = None
@@ -2361,6 +2385,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 return
             
             renamed_count = 0
+            identities_dir = Path("identities")
+            
             for old_name in selected:
                 new_name = simpledialog.askstring("✏ Rename Employee", 
                                                  f"Enter new name for '{old_name}':",
@@ -2371,12 +2397,26 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         messagebox.showerror("❌ Error", f"Employee '{new_name}' already exists! Skipping.")
                         continue
                     
+                    # Update database
                     employee_db[new_name] = employee_db.pop(old_name)
+                    
+                    # Rename image folder if it exists
+                    old_folder = identities_dir / old_name
+                    new_folder = identities_dir / new_name
+                    
+                    if old_folder.exists() and old_folder.is_dir():
+                        try:
+                            old_folder.rename(new_folder)
+                            print(f"Renamed image folder: {old_folder} -> {new_folder}")
+                        except Exception as e:
+                            print(f"Failed to rename image folder for '{old_name}': {e}")
+                            # Continue with database rename even if folder rename fails
+                    
                     renamed_count += 1
             
             if renamed_count > 0:
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
-                messagebox.showinfo("✅ Success", f"Successfully renamed {renamed_count} employee(s)!")
+                messagebox.showinfo("✅ Success", f"Successfully renamed {renamed_count} employee(s) and their image folders!")
                 self.update_stats_display()
                 self.update_debug_display()
             dialog.destroy()
@@ -2582,16 +2622,32 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 return
             
             confirm = messagebox.askyesno("⚠ Confirm Deletion", 
-                                         f"Are you sure you want to delete {len(selected)} employee(s)?\n" +
+                                         f"Are you sure you want to delete {len(selected)} employee(s) and their image folders?\n" +
                                          "\n".join(f"• {name}" for name in selected[:5]) +
                                          (f"\n... and {len(selected) - 5} more" if len(selected) > 5 else ""),
                                          icon='warning')
             if confirm:
+                identities_dir = Path("identities")
+                deleted_count = 0
+                
                 for name in selected:
+                    # Delete from database
                     del employee_db[name]
+                    
+                    # Delete image folder if it exists
+                    employee_folder = identities_dir / name
+                    if employee_folder.exists() and employee_folder.is_dir():
+                        try:
+                            shutil.rmtree(employee_folder)
+                            print(f"Deleted image folder: {employee_folder}")
+                        except Exception as e:
+                            print(f"Failed to delete image folder for '{name}': {e}")
+                            # Continue with deletion even if folder deletion fails
+                    
+                    deleted_count += 1
                 
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
-                messagebox.showinfo("✅ Success", f"Successfully deleted {len(selected)} employee(s)!")
+                messagebox.showinfo("✅ Success", f"Successfully deleted {deleted_count} employee(s) and their image folders!")
                 self.update_stats_display()
                 self.update_debug_display()
                 dialog.destroy()
@@ -2623,13 +2679,26 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
             name = listbox.get(selection[0])
             confirm = messagebox.askyesno("🗑 Confirm Deletion", 
-                                        f"Are you sure you want to delete '{name}'?\nThis action cannot be undone!", 
+                                        f"Are you sure you want to delete '{name}' and their image folder?\nThis action cannot be undone!", 
                                         parent=dialog)
             
             if confirm:
+                # Delete from database
                 del employee_db[name]
+                
+                # Delete image folder if it exists
+                identities_dir = Path("identities")
+                employee_folder = identities_dir / name
+                if employee_folder.exists() and employee_folder.is_dir():
+                    try:
+                        shutil.rmtree(employee_folder)
+                        print(f"Deleted image folder: {employee_folder}")
+                    except Exception as e:
+                        print(f"Failed to delete image folder for '{name}': {e}")
+                        # Continue with deletion even if folder deletion fails
+                
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
-                messagebox.showinfo("✅ Deleted", f"Employee '{name}' has been deleted")
+                messagebox.showinfo("✅ Deleted", f"Employee '{name}' and their image folder have been deleted")
                 self.recognition_stats['unique_faces_today'].discard(name)
                 self.update_stats_display()
                 self.update_debug_display()
