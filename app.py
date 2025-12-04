@@ -1205,7 +1205,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         tk.Label(instructions, text="📋 Registration Instructions:", 
                 font=('Arial', 10, 'bold'), fg='#27ae60', bg='#e8f5e8').pack(anchor=tk.W, padx=10, pady=(10, 5))
 
-        inst_text = """• Look directly at the camera\n• Make sure you have good lighting\n• Keep your face centered and still\n• Follow the on-screen pose instructions\n• Hold each pose steady when prompted\n• Registration captures 5 different poses"""
+        inst_text = """• Position yourself 2-3 feet from camera (closer = better quality)\n• Look directly at the camera\n• Make sure you have good lighting\n• Keep your face centered and still\n• Follow the on-screen pose instructions\n• Hold each pose steady when prompted\n• Registration captures 3 optimized poses for stationary setup"""
 
         tk.Label(instructions, text=inst_text, font=('Arial', 9), 
                 fg='#2d5a2d', bg='#e8f5e8', justify=tk.LEFT, wraplength=350).pack(anchor=tk.W, padx=10, pady=(0, 10))
@@ -1223,13 +1223,13 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             # Import config constants
             try:
                 from config import (
-                    REGISTRATION_POSES_FULL, REGISTRATION_INSTRUCTIONS_FULL
+                    REGISTRATION_POSES_QUICK, REGISTRATION_INSTRUCTIONS_QUICK
                 )
                 
-                # Use 5 poses (center, left, right, up, down) for better coverage
-                # Skip the final "center again" from full mode
-                poses = REGISTRATION_POSES_FULL[:5]
-                instructions = REGISTRATION_INSTRUCTIONS_FULL[:5]
+                # OPTIMIZED: Use 3 poses for stationary camera (center, left, right)
+                # Skip up/down as camera is stationary - focus on side angles for better embedding separation
+                poses = REGISTRATION_POSES_QUICK  # ["center", "right", "left"]
+                instructions = REGISTRATION_INSTRUCTIONS_QUICK  # ["Face forward", "Turn left", "Turn right"]
                 
                 self.registration_mode = True
                 self.registration_name = name
@@ -1245,7 +1245,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 }
                 # Clear any previous feedback
                 self.registration_feedback = ""
-                self.status_text.set(f"🔵 Step 1/{len(poses)}: {instructions[0]}")
+                self.status_text.set(f"🔵 Step 1/{len(poses)}: {instructions[0]} (Position closer for better quality)")
                 dialog.destroy()
             except Exception as e:
                 print(f"Registration initialization error: {e}")
@@ -1518,9 +1518,14 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             try:
                                 from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
                                 
-                                # Quick quality checks
-                                blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=40)
-                                brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 25, 230, 30)
+                                # ENHANCED: Quality checks optimized for closer distance
+                                blur_var, blur_ok, blur_msg = check_image_blur(cropped_face, threshold=50)  # Slightly higher blur threshold
+                                brightness, contrast, lighting_ok, lighting_msg = check_image_lighting(cropped_face, 30, 220, 35)  # Tighter lighting control
+                                
+                                # Face size guidance for optimal distance
+                                face_size = min(cropped_face.shape[0], cropped_face.shape[1])
+                                optimal_size = face_size >= 150  # Encourage larger faces
+                                size_feedback = "" if optimal_size else " (Move closer for better quality)"
                                 
                                 # Pose validation
                                 target_pose = state['poses_required'][state['step']]
@@ -1532,12 +1537,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 blur_ok, lighting_ok, pose_ok = True, True, True
                                 pose_feedback = "Processing..."
                             
-                            if blur_ok and lighting_ok and pose_ok:
+                            if blur_ok and lighting_ok and pose_ok and optimal_size:
                                 state['hold_frames'] += 1
                                 remaining = 3 - state['hold_frames']
                                 
                                 if remaining > 0:
-                                    self.registration_feedback = f"Hold steady... {remaining}"
+                                    self.registration_feedback = f"Perfect! Hold steady... {remaining}{size_feedback}"
                                     self.registration_feedback_color = (0, 255, 0)
                                 else:
                                     # Capture this pose
@@ -1566,14 +1571,18 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                             else:
                                 state['hold_frames'] = 0
-                                if not blur_ok:
-                                    self.registration_feedback = "Image too blurry"
-                                    self.registration_feedback_color = (255, 165, 0)
-                                elif not lighting_ok:
-                                    self.registration_feedback = "Poor lighting"
+                                
+                                if not optimal_size:
+                                    self.registration_feedback = "Move closer - face should be larger in frame"
                                     self.registration_feedback_color = (255, 165, 0)
                                 elif not pose_ok:
                                     self.registration_feedback = f"Adjust Pose: {pose_feedback}"
+                                    self.registration_feedback_color = (255, 165, 0)
+                                elif not blur_ok:
+                                    self.registration_feedback = f"Too blurry ({blur_var:.1f}) - hold still"
+                                    self.registration_feedback_color = (255, 165, 0)
+                                elif not lighting_ok:
+                                    self.registration_feedback = f"Adjust lighting (brightness: {brightness:.0f}, contrast: {contrast:.0f})"
                                     self.registration_feedback_color = (255, 165, 0)
                 else:
                     # Initialize feedback if not set

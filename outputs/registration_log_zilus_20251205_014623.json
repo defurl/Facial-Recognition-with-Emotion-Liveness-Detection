@@ -1,0 +1,84 @@
+{
+  "person_name": "zilus",
+  "registration_timestamp": "2025-12-05T01:46:23.796621",
+  "poses": [
+    {
+      "pose_id": "front_neutral",
+      "instruction": "Look straight at camera - neutral expression",
+      "quality_score": 100.0,
+      "quality_details": {
+        "face_size": 230,
+        "blur_score": 188.12453038118068,
+        "brightness": 146.76453686200378,
+        "contrast": 58.84602269464198,
+        "eyes_detected": 4
+      },
+      "timestamp": "2025-12-05T01:45:25.416343"
+    },
+    {
+      "pose_id": "slight_left",
+      "instruction": "Turn head left 10-15 degrees",
+      "quality_score": 90.0,
+      "quality_details": {
+        "face_size": 258,
+        "blur_score": 279.7464371949099,
+        "brightness": 142.36838230875549,
+        "contrast": 66.5366974827685,
+        "eyes_detected": 4,
+        "max_embedding_distance": 0.809923991560936
+      },
+      "timestamp": "2025-12-05T01:45:32.574463"
+    },
+    {
+      "pose_id": "slight_right",
+      "instruction": "Turn head right 10-15 degrees",
+      "quality_score": 90.0,
+      "quality_details": {
+        "face_size": 230,
+        "blur_score": 206.76878067581234,
+        "brightness": 158.1052741020794,
+        "contrast": 60.68734693528759,
+        "eyes_detected": 2,
+        "max_embedding_distance": 1.0524761900305748
+      },
+      "timestamp": "2025-12-05T01:45:42.225883"
+    },
+    {
+      "pose_id": "chin_down",
+      "instruction": "Lower chin slightly - keep eyes on camera",
+      "quality_score": 90.0,
+      "quality_details": {
+        "face_size": 240,
+        "blur_score": 189.00717099609366,
+        "brightness": 135.09375,
+        "contrast": 60.567953365013,
+        "eyes_detected": 4,
+        "max_embedding_distance": 0.8435319662094116
+      },
+      "timestamp": "2025-12-05T01:45:46.984547"
+    },
+    {
+      "pose_id": "chin_up",
+      "instruction": "Raise chin slightly - keep eyes on camera",
+      "quality_score": 90.0,
+      "quality_details": {
+        "face_size": 385,
+        "blur_score": 168.60592612541262,
+        "brightness": 119.99666722887503,
+        "contrast": 60.98164805014038,
+        "eyes_detected": 2,
+        "max_embedding_distance": 0.8355641663074493
+      },
+      "timestamp": "2025-12-05T01:45:53.134284"
+    }
+  ],
+  "validation": {
+    "max_embedding_distance": 1.4508452415466309,
+    "mean_embedding_distance": 0.9989830851554871,
+    "average_quality_score": 92.0,
+    "validation_passed": false,
+    "warnings": [
+      "High embedding variation (1.4508)"
+    ]
+  }
+}

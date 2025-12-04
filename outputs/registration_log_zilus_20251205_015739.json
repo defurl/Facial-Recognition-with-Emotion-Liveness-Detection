@@ -1,0 +1,59 @@
+{
+  "person_name": "zilus",
+  "registration_timestamp": "2025-12-05T01:57:39.480067",
+  "poses": [
+    {
+      "pose_id": "front_neutral",
+      "instruction": "Look straight at camera - neutral expression",
+      "quality_score": 105.0,
+      "quality_details": {
+        "face_size": 235,
+        "distance_optimal": true,
+        "blur_score": 204.19339421769578,
+        "brightness": 147.1790855590765,
+        "contrast": 60.0860877570119,
+        "eyes_detected": 2
+      },
+      "timestamp": "2025-12-05T01:57:31.968126"
+    },
+    {
+      "pose_id": "slight_left",
+      "instruction": "Turn head left 10-15 degrees",
+      "quality_score": 105.0,
+      "quality_details": {
+        "face_size": 232,
+        "distance_optimal": true,
+        "blur_score": 229.5188148000384,
+        "brightness": 152.10824167657552,
+        "contrast": 60.1637096300628,
+        "eyes_detected": 2,
+        "max_embedding_distance": 0.20966172218322754
+      },
+      "timestamp": "2025-12-05T01:57:35.215371"
+    },
+    {
+      "pose_id": "slight_right",
+      "instruction": "Turn head right 10-15 degrees",
+      "quality_score": 105.0,
+      "quality_details": {
+        "face_size": 231,
+        "distance_optimal": true,
+        "blur_score": 228.78597744946654,
+        "brightness": 150.5225726654298,
+        "contrast": 60.22206693272744,
+        "eyes_detected": 2,
+        "max_embedding_distance": 0.12264609336853027
+      },
+      "timestamp": "2025-12-05T01:57:38.397447"
+    }
+  ],
+  "validation": {
+    "max_embedding_distance": 0.6475520730018616,
+    "mean_embedding_distance": 0.4696955680847168,
+    "average_quality_score": 105.0,
+    "validation_passed": true,
+    "warnings": [
+      "High embedding variation (0.6476)"
+    ]
+  }
+}
