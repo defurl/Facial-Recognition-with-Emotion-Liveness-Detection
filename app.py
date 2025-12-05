@@ -1641,17 +1641,36 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 self.consec_spoof_count = 0
                 self.consec_real_count = 0
             
-            # Only reset blink detector if it's been running for a while
-            # This prevents constant resets during continuous operation
+            # Smart blink detector reset: Allow reset for next user, but prevent rapid resets during verification
             if hasattr(self, 'blink_detector') and self.blink_detector:
-                if hasattr(self.blink_detector, 'last_reset_time'):
-                    current_time = time.time()
-                    if current_time - getattr(self.blink_detector, 'last_reset_time', 0) > 5.0:  # 5 second cooldown
+                current_time = time.time()
+                
+                # For identity lock timeout (next user), ensure minimum gap between resets
+                if reason == "identity lock timeout":
+                    if hasattr(self.blink_detector, 'last_reset_time'):
+                        time_since_reset = current_time - getattr(self.blink_detector, 'last_reset_time', 0)
+                        if time_since_reset > 3.0:  # Minimum 3 seconds between user resets
+                            self.blink_detector.reset()
+                            self.blink_detector.last_reset_time = current_time
+                            print(f"[BLINK] Reset for next user (gap: {time_since_reset:.1f}s)")
+                        else:
+                            print(f"[BLINK] Skip rapid reset - next user can continue current verification")
+                    else:
                         self.blink_detector.reset()
                         self.blink_detector.last_reset_time = current_time
+                        print(f"[BLINK] Initial reset for next user")
                 else:
-                    self.blink_detector.reset()
-                    self.blink_detector.last_reset_time = time.time()
+                    # For other reasons, use longer cooldown to prevent interruption
+                    if hasattr(self.blink_detector, 'last_reset_time'):
+                        time_since_reset = current_time - getattr(self.blink_detector, 'last_reset_time', 0)
+                        if time_since_reset > 10.0:  # Longer cooldown for other resets
+                            self.blink_detector.reset()
+                            self.blink_detector.last_reset_time = current_time
+                            print(f"[BLINK] Reset due to: {reason}")
+                    else:
+                        self.blink_detector.reset()
+                        self.blink_detector.last_reset_time = current_time
+                        print(f"[BLINK] Initial reset due to: {reason}")
             
             # Reset external liveness detector
             from src.emotion import reset_liveness_detector
@@ -2026,9 +2045,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     # Initialize verification timer
                                     if self.verification_start_time is None:
                                         self.verification_start_time = time.time()
-                                        # Ensure clean blink detection state for new verification
-                                        if hasattr(self, 'blink_detector') and self.blink_detector:
-                                            self.blink_detector.reset()
+                                        # Let blink detector maintain state across verifications for better continuity
                                     
                                     current_time = time.time()
                                     
@@ -2040,6 +2057,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                 self.verification_start_time, current_time, min_blinks=1
                                             )
                                             
+                                            # Blink detection working properly
+                                            
                                             elapsed = current_time - self.verification_start_time
                                             
                                             # Simple liveness decision (like test_liveness_simple.py)
@@ -2047,15 +2066,16 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                 is_live = True
                                                 liveness_confidence = 0.95
                                                 emotion = 'Neutral'  # Skip emotion analysis for performance
-                                            elif elapsed < 5.0:  # Extended timeout for better UX
+                                            elif elapsed < 10.0:  # Extended timeout for better UX
                                                 is_live = None  # Still waiting
                                                 liveness_confidence = 0.5
                                                 emotion = 'Neutral'
                                             else:
-                                                # Timeout - reset and allow retry
+                                                # Extended timeout - reset and allow retry (only after 10s)
                                                 self.verification_start_time = time.time()
                                                 if hasattr(self, 'blink_detector') and self.blink_detector:
                                                     self.blink_detector.reset()
+                                                    print(f"[BLINK] Reset after 10s timeout - fresh start")
                                                 is_live = False  # Failed verification
                                                 liveness_confidence = 0.1
                                                 emotion = 'Neutral'
@@ -2073,7 +2093,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             }
                                             
                                             if blink_detected:
-                                                pass  # Blink detected - continue processing
+                                                print(f"[BLINK DETECTED!] Frame {len(tracked_faces)}, Total blinks: {total_blinks}, EAR: {current_ear:.3f}")
                                                 
                                         except Exception as blink_error:
                                             # Use safe defaults on blink detection error

@@ -210,6 +210,8 @@ class BlinkDetector:
                     self.last_blink_time = timestamp
                     self.blink_timestamps.append(timestamp)  # Record blink event
                     blink_detected = True
+                    pass  # Valid blink detected
+                # Blink validation complete (duration checked)
                 
                 # Reset state
                 self.is_eye_closed = False
