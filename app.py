@@ -376,9 +376,19 @@ class AttendanceSystemGUI:
         self.window.bind('<Escape>', lambda e: self.window.attributes('-fullscreen', False))
         self.fullscreen = False
         
+        # Configure styles
+        self.setup_styles()
+        
         # Core state
         self.cap = None
-        self.running = Falsewarning = False
+        self.running = False
+        self.multiple_faces_warning = False
+        
+        # Processing control - optimized for performance
+        self.frame_count = 0
+        self.PROCESS_EVERY_N_FRAMES = max(5, PROCESS_EVERY_N_FRAMES)  # Process every 5 frames
+        self.EMOTION_EVERY_N_FRAMES = 5  # Process emotion/liveness every 5 frames
+        self.last_processed_frame = 0
         
         # Multi-face tracking for concurrent processing
         self.face_identities = []  # Store identity for each processed face
@@ -1962,19 +1972,47 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     adjusted_threshold = current_threshold
                                     if len(employee_db) <= 2:  # Small database - be more strict
                                         adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
-                                        print(f"    [SMALL DB] Using stricter threshold: {adjusted_threshold:.4f}")
                                     
-                                    # Note: Removed multi-face strictness to prevent excessive false rejections
-                                    # The system now relies on confidence thresholds and smoothing for stability
+                                    # MULTI-PERSON ENHANCEMENT: Store all verification results for conflict resolution
+                                    verification_result = {
+                                        'face_idx': face_idx,
+                                        'best_match': best_match,
+                                        'distance': min_distance,
+                                        'confidence': confidence,
+                                        'threshold': adjusted_threshold,
+                                        'bbox': (x, y, w, h)
+                                    }
                                     
-                                    # Determine identity with confidence-based rejection
+                                    # Store in frame-level results for conflict resolution
+                                    if not hasattr(self, 'current_frame_verifications'):
+                                        self.current_frame_verifications = []
+                                    self.current_frame_verifications.append(verification_result)
+                                    
+                                    # ENHANCED MULTI-PERSON IDENTITY DETERMINATION
                                     if confidence < CONFIDENCE_REJECTION_THRESHOLD * 100:
                                         raw_identity = "Not Registered (Low Confidence)"
-                                        # Only log rejections for primary face
                                         if face_idx == 0:
                                             print(f"Rejected: Low confidence ({confidence:.0f}%)")
                                     elif min_distance < adjusted_threshold:
-                                        raw_identity = best_match
+                                        # CONFLICT RESOLUTION: Check if another face has better match for same person
+                                        if len(faces_to_process) > 1 and hasattr(self, 'current_frame_verifications'):
+                                            # Find if any other face has better confidence for this person
+                                            better_match_exists = False
+                                            for other_result in self.current_frame_verifications:
+                                                if (other_result['best_match'] == best_match and 
+                                                    other_result['face_idx'] != face_idx and
+                                                    other_result['confidence'] > confidence + 10):  # 10% better threshold
+                                                    better_match_exists = True
+                                                    break
+                                            
+                                            if better_match_exists:
+                                                raw_identity = "Ambiguous Match"
+                                                if face_idx == 0:
+                                                    print(f"Conflict: Another face has better match for {best_match}")
+                                            else:
+                                                raw_identity = best_match
+                                        else:
+                                            raw_identity = best_match
                                     else:
                                         raw_identity = "Not Registered"
                                     
@@ -2312,7 +2350,15 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 cv2.putText(frame, warning_text, (18, th + 14), 
                            font_warn, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
             elif len(faces) > 1:
-                info_text = f"✓ Processing {len(faces)} faces simultaneously"
+                # ENHANCED: Show multi-person verification statistics
+                if hasattr(self, 'current_frame_verifications') and len(self.current_frame_verifications) > 1:
+                    verified_people = [r['best_match'] for r in self.current_frame_verifications 
+                                     if r['confidence'] > CONFIDENCE_REJECTION_THRESHOLD * 100]
+                    unique_people = len(set(verified_people))
+                    info_text = f"✓ {len(faces)} faces: {unique_people} unique people verified"
+                else:
+                    info_text = f"✓ Processing {len(faces)} faces simultaneously"
+                    
                 font_info = cv2.FONT_HERSHEY_DUPLEX
                 (tw, th), _ = cv2.getTextSize(info_text, font_info, 0.5, 1)
                 overlay = frame.copy()
