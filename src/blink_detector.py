@@ -45,7 +45,7 @@ class BlinkDetector:
         'bottom_2': 263   # p5 - bottom inner (reusing inner corner)
     }
     
-    def __init__(self, ear_threshold=0.5, history_size=30, min_blink_duration=0.08, max_blink_duration=0.4):
+    def __init__(self, ear_threshold=0.5, history_size=30, min_blink_duration=0.08, max_blink_duration=0.8):
         """
         Initialize blink detector with thread safety
         
@@ -194,6 +194,7 @@ class BlinkDetector:
                 self.is_eye_closed = True
                 self.eye_closed_start = timestamp
                 self.consecutive_closed_frames = 1
+                pass  # Eye closing detected
             else:
                 # Eye still closed
                 self.consecutive_closed_frames += 1
@@ -210,8 +211,7 @@ class BlinkDetector:
                     self.last_blink_time = timestamp
                     self.blink_timestamps.append(timestamp)  # Record blink event
                     blink_detected = True
-                    pass  # Valid blink detected
-                # Blink validation complete (duration checked)
+                # Blink validation completed
                 
                 # Reset state
                 self.is_eye_closed = False
