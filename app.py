@@ -437,10 +437,31 @@ class AttendanceSystemGUI:
         # Initialize missing attributes
         self.confidence_buffer = []
         self.no_face_frames = 0
+        # Last-known display values (prevent AttributeError when display updates run before first detection)
+        self.last_identity = "No face detected"
+        self.last_emotion = "Neutral"
+        self.last_liveness = "Unknown"
+        self.last_liveness_confidence = 0.0
+        self.last_distance = 0.0
+        self.last_confidence = 0.0
         
         # Recognition smoothing to reduce flickering
         self.recognition_history = []  # Store last N recognition results
         self.SMOOTHING_WINDOW = 7  # Increased from 3 to 7 for better stability
+        
+        # Missing attributes initialization
+        self.matched_pose_index = -1  # Initialize pose matching index
+        self.ear_canvas = None  # Will be set during UI setup
+        
+        # EAR detection optimization - Balanced thresholds for reliable blink detection
+        self.ear_threshold = 0.45  # Optimized threshold based on your data (was 0.5)
+        from collections import deque
+        self.ear_history = deque(maxlen=50)  # Store last 50 EAR values (~1.5 seconds at 30fps)
+        self.ear_lock = threading.Lock()  # Thread safety for EAR data
+        self.ear_baseline = 0.55  # Expected open-eye EAR baseline
+        self.ear_blink_sensitivity = 0.75  # Sensitivity multiplier (0.45 = 0.55 * 0.75)
+        self.current_ear = 0.0  # Current EAR value
+        self.current_blinks = 0  # Current blink count
         
         # Face tracking for consistent identity assignment
         self.face_trackers = {}  # Track face positions across frames
@@ -459,14 +480,14 @@ class AttendanceSystemGUI:
         
         # Spoof detection state tracking
         self.last_spoof_detection_time = 0
-        self.SPOOF_WARNING_DISPLAY_TIME = 2.0  # Show spoof warning for 2 seconds
+        self.SPOOF_WARNING_DISPLAY_TIME = 8.0  # Show spoof warning for 8 seconds (increased)
         self.spoof_warning_shown = False  # Track if warning has been shown
         self.last_emotion_check_frame = 0
         
         # Hysteresis for liveness (reduce flicker from single-frame noise)
         self.consec_spoof_count = 0
         self.consec_real_count = 0
-        self.CONSEC_REQUIRED = 2  # Require 2 consecutive same results before updating UI
+        self.CONSEC_REQUIRED = 6  # Require 6 consecutive same results before declaring spoof (increased)
         
         # EAR (Eye Aspect Ratio) tracking for blink detection visualization
         from collections import deque
@@ -702,19 +723,24 @@ class AttendanceSystemGUI:
                                      font=('Arial', 10), borderwidth=0, highlightthickness=0)
         self.log_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # EAR Debug Panel (PERFORMANCE OPTIMIZED - Simple Text Display)
+        # EAR Debug Panel with Canvas for Real-time Graph
         ear_debug_frame = ttk.LabelFrame(right_panel, text="BLINK DETECTION DEBUG")
         ear_debug_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ear_container = tk.Frame(ear_debug_frame, bg='#161b22', height=100)
+        ear_container = tk.Frame(ear_debug_frame, bg='#161b22', height=120)
         ear_container.pack(fill=tk.X, padx=10, pady=10)
         ear_container.pack_propagate(False)
         
-        # Simple text-based debug (no canvas to avoid freezing)
+        # Canvas for EAR visualization
+        self.ear_canvas = tk.Canvas(ear_container, bg='#0d0d0d', height=80,
+                                   highlightthickness=1, highlightbackground='#444c56')
+        self.ear_canvas.pack(fill=tk.X, pady=(0, 5))
+        
+        # Simple text-based debug for additional info
         self.ear_debug_text = tk.Text(ear_container, bg='#0d0d0d', fg='#c9d1d9', 
-                                     height=5, font=('Arial', 8), wrap=tk.WORD,
+                                     height=2, font=('Arial', 8), wrap=tk.WORD,
                                      highlightthickness=1, highlightbackground='#444c56')
-        self.ear_debug_text.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        self.ear_debug_text.pack(fill=tk.X, pady=(0, 5))
         
         # EAR status labels
         ear_status_frame = tk.Frame(ear_container, bg='#161b22')
@@ -914,109 +940,166 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             self.debug_text.set(debug_text)
     
     def update_ear_debug_panel(self):
-        """Update the EAR debug panel in the right sidebar"""
+        """Update the EAR debug panel with balanced blink detection analysis"""
         try:
+            # Safely get EAR data
             with self.ear_lock:
                 ear_list = list(self.ear_history)
                 
             if not ear_list:
                 # No data yet
-                self.ear_current_label.config(text="Current EAR: --", fg='#8b949e')
-                self.blink_count_label.config(text="Blinks: --", fg='#8b949e')
+                if hasattr(self, 'ear_current_label'):
+                    self.ear_current_label.config(text="Current EAR: --", fg='#8b949e')
+                    self.blink_count_label.config(text="Blinks: --", fg='#8b949e')
                 return
             
-            # Update text labels
+            # Calculate balanced EAR metrics
             current_ear = ear_list[-1]
-            ear_color = '#3fb950' if current_ear > self.ear_threshold else '#f85149'  # Green/Red
-            self.ear_current_label.config(text=f"Current EAR: {current_ear:.3f}", fg=ear_color)
+            recent_ears = ear_list[-5:] if len(ear_list) >= 5 else ear_list  # Last 5 frames
+            avg_recent_ear = sum(recent_ears) / len(recent_ears)
+            ear_variance = sum((x - avg_recent_ear) ** 2 for x in recent_ears) / len(recent_ears)
             
-            # Get blink count from detector if available
-            if hasattr(self, '_fast_blink_detector'):
-                blink_count = self._fast_blink_detector.blink_count
-                self.blink_count_label.config(text=f"Blinks: {blink_count}", fg='#58a6ff')
+            # Dynamic threshold based on recent baseline
+            if len(ear_list) >= 10:
+                baseline_ears = [e for e in ear_list[-10:] if e > self.ear_threshold]  # Open-eye samples
+                if baseline_ears:
+                    dynamic_baseline = sum(baseline_ears) / len(baseline_ears)
+                    adaptive_threshold = dynamic_baseline * self.ear_blink_sensitivity
+                    # Smooth threshold changes
+                    self.ear_threshold = 0.7 * self.ear_threshold + 0.3 * adaptive_threshold
             
-            # Draw EAR graph on canvas
-            self.ear_canvas.delete("all")  # Clear previous drawing
-            canvas_width = self.ear_canvas.winfo_width()
-            canvas_height = self.ear_canvas.winfo_height()
+            # Determine blink state with hysteresis
+            is_likely_blink = current_ear < self.ear_threshold
+            blink_confidence = max(0, (self.ear_threshold - current_ear) / self.ear_threshold) if is_likely_blink else 0
             
-            if canvas_width <= 1 or canvas_height <= 1:
-                return  # Canvas not ready yet
-            
-            # Draw background
-            self.ear_canvas.create_rectangle(0, 0, canvas_width, canvas_height, 
-                                           fill='#0d0d0d', outline='#444c56')
-            
-            # Draw threshold line (yellow)
-            threshold_y = canvas_height - (self.ear_threshold / 0.8 * canvas_height)
-            self.ear_canvas.create_line(0, threshold_y, canvas_width, threshold_y, 
-                                      fill='#d29922', width=2)
-            self.ear_canvas.create_text(5, threshold_y - 10, text=f"Threshold: {self.ear_threshold:.2f}", 
-                                      fill='#d29922', anchor='nw', font=('Arial', 8))
-            
-            # Plot EAR values
-            if len(ear_list) > 1:
-                points = []
-                for i, ear_value in enumerate(ear_list):
-                    x = i * canvas_width / max(len(ear_list) - 1, 1)
-                    y = canvas_height - (min(ear_value, 0.8) / 0.8 * canvas_height)
-                    points.extend([x, y])
+            # Update labels with enhanced info
+            if hasattr(self, 'ear_current_label'):
+                ear_color = '#f85149' if is_likely_blink else '#3fb950'  # Red for blink, Green for open
+                self.ear_current_label.config(text=f"EAR: {current_ear:.3f} (Avg: {avg_recent_ear:.3f})", fg=ear_color)
                 
-                # Draw the line graph
-                if len(points) >= 4:  # Need at least 2 points (4 coordinates)
-                    self.ear_canvas.create_line(points, fill='#58a6ff', width=2, smooth=True)
-                
-                # Color-code the current state
-                last_y = canvas_height - (min(current_ear, 0.8) / 0.8 * canvas_height)
-                point_color = '#3fb950' if current_ear > self.ear_threshold else '#f85149'
-                self.ear_canvas.create_oval(canvas_width - 5, last_y - 3, 
-                                          canvas_width - 1, last_y + 3, 
-                                          fill=point_color, outline=point_color)
+                # Get blink count from detector if available
+                if hasattr(self, '_fast_blink_detector'):
+                    blink_count = self._fast_blink_detector.blink_count
+                    confidence_text = f" | Conf: {blink_confidence:.1%}" if is_likely_blink else ""
+                    self.blink_count_label.config(text=f"Blinks: {blink_count}{confidence_text}", fg='#58a6ff')
+            
+            # Enhanced canvas visualization (only if canvas exists)
+            if hasattr(self, 'ear_canvas') and self.ear_canvas:
+                try:
+                    self.ear_canvas.delete("all")  # Clear previous drawing
+                    canvas_width = self.ear_canvas.winfo_width()
+                    canvas_height = self.ear_canvas.winfo_height()
+                    
+                    if canvas_width <= 1 or canvas_height <= 1:
+                        return  # Canvas not ready yet
+                    
+                    # Draw background
+                    self.ear_canvas.create_rectangle(0, 0, canvas_width, canvas_height, 
+                                                   fill='#0d0d0d', outline='#444c56')
+                    
+                    # Draw dynamic threshold line (adaptive color)
+                    threshold_y = canvas_height - (self.ear_threshold / 0.8 * canvas_height)
+                    threshold_color = '#d29922' if not is_likely_blink else '#f85149'
+                    self.ear_canvas.create_line(0, threshold_y, canvas_width, threshold_y, 
+                                              fill=threshold_color, width=2)
+                    self.ear_canvas.create_text(5, threshold_y - 10, text=f"Thresh: {self.ear_threshold:.3f}", 
+                                              fill=threshold_color, anchor='nw', font=('Arial', 7))
+                    
+                    # Draw baseline reference (higher line)
+                    baseline_y = canvas_height - (self.ear_baseline / 0.8 * canvas_height)
+                    self.ear_canvas.create_line(0, baseline_y, canvas_width, baseline_y, 
+                                              fill='#58a6ff', width=1, dash=(2, 2))
+                    
+                    # Plot EAR values with enhanced visualization
+                    if len(ear_list) > 1:
+                        points = []
+                        for i, ear_value in enumerate(ear_list):
+                            x = i * canvas_width / max(len(ear_list) - 1, 1)
+                            y = canvas_height - (min(ear_value, 0.8) / 0.8 * canvas_height)
+                            points.extend([x, y])
+                        
+                        # Draw the line graph
+                        if len(points) >= 4:  # Need at least 2 points (4 coordinates)
+                            line_color = '#f85149' if is_likely_blink else '#58a6ff'
+                            self.ear_canvas.create_line(points, fill=line_color, width=2, smooth=True)
+                        
+                        # Enhanced current state indicator
+                        last_y = canvas_height - (min(current_ear, 0.8) / 0.8 * canvas_height)
+                        point_size = 4 if is_likely_blink else 3
+                        point_color = '#f85149' if is_likely_blink else '#3fb950'
+                        self.ear_canvas.create_oval(canvas_width - point_size, last_y - point_size, 
+                                                  canvas_width + point_size, last_y + point_size, 
+                                                  fill=point_color, outline='#ffffff', width=1)
+                except Exception as canvas_error:
+                    # Canvas-specific error, continue with text updates
+                    pass
+            
+            # Update debug text with detailed metrics
+            if hasattr(self, 'ear_debug_text'):
+                debug_info = f"Variance: {ear_variance:.4f} | Sensitivity: {self.ear_blink_sensitivity:.2f}\n"
+                debug_info += f"State: {'BLINK' if is_likely_blink else 'OPEN'} | Confidence: {blink_confidence:.1%}"
+                self.ear_debug_text.delete(1.0, tk.END)
+                self.ear_debug_text.insert(tk.END, debug_info)
             
         except Exception as e:
             print(f"[EAR PANEL] Error updating debug panel: {e}")
     
+    def update_ear_debug_display(self, current_ear, blink_count):
+        """Thread-safe method to update EAR display from worker threads"""
+        try:
+            # This method is called via window.after() to ensure thread safety
+            self.update_ear_debug_panel()
+        except Exception as e:
+            print(f"[EAR DISPLAY] Error updating EAR debug display: {e}")
+    
     def _open_camera_with_fallback(self):
         """Try camera indices with fallback options"""
-        # Try multiple camera indices
-        preferred_indices = [0, 1, 2, CAMERA_INDEX]  # Try 0 first (most common)
-        
+        # Try multiple camera indices (try configured index first)
+        preferred_indices = [CAMERA_INDEX, 0, 1, 2]
+
         for idx in preferred_indices:
             cap = None
             try:
-                print(f"Trying camera {1}...")
-                cap = cv2.VideoCapture(1)
-                
-                if cap is None:
+                print(f"Trying camera {idx}...")
+                # Use platform-default backend; on Linux cv2 will pick V4L2. If a backend is required,
+                # consider passing cv2.CAP_V4L2 as the second arg.
+                cap = cv2.VideoCapture(idx)
+
+                # VideoCapture always returns an object; guard by checking isOpened
+                if not cap or not cap.isOpened():
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
                     continue
-                    
-                if not cap.isOpened():
-                    cap.release()
-                    continue
-                
+
                 # Wait for camera to initialize
                 time.sleep(0.8)
-                
+
                 # Test if we can actually read a frame
                 try:
                     ret, test_frame = cap.read()
-                    if ret and test_frame is not None and test_frame.size > 0:
+                    if ret and test_frame is not None and getattr(test_frame, 'size', 0) > 0:
                         print(f"[OK] Successfully opened camera {idx}")
                         return cap
                 except Exception as read_err:
                     print(f"  Frame read error on camera {idx}: {read_err}")
-                
+
                 # Release and don't retry to avoid memory issues
-                cap.release()
+                try:
+                    cap.release()
+                except Exception:
+                    pass
                 cap = None
                 time.sleep(0.3)
-                    
+
             except Exception as e:
                 print(f"  Error with camera {idx}: {e}")
                 if cap is not None:
                     try:
                         cap.release()
-                    except:
+                    except Exception:
                         pass
                 continue
         
@@ -1399,6 +1482,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             finally:
                 self.registration_mode = False
                 self.registration_state = None
+                # Reset spoof detection for next user
+                self.reset_spoof_detection("registration completed")
         
         def cancel_registration():
             self.registration_mode = False
@@ -1410,6 +1495,40 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                   style='Success.TButton', width=20).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="✗ Cancel", command=cancel_registration,
                   style='Danger.TButton', width=15).pack(side=tk.LEFT, padx=5)
+    
+    def reset_spoof_detection(self, reason="identity change"):
+        """Reset spoof detection state for new verification cycle"""
+        try:
+            print(f"[SPOOF] Resetting spoof detection state - reason: {reason}")
+            with self.liveness_state_lock:
+                self.last_liveness = 'Unknown'
+                self.last_liveness_confidence = 0.0
+                self.spoof_warning_shown = False
+                self.last_spoof_detection_time = 0
+                self.consec_spoof_count = 0
+                self.consec_real_count = 0
+            
+            # Only reset blink detector if it's been running for a while
+            # This prevents constant resets during continuous operation
+            if hasattr(self, 'blink_detector') and self.blink_detector:
+                if hasattr(self.blink_detector, 'last_reset_time'):
+                    current_time = time.time()
+                    if current_time - getattr(self.blink_detector, 'last_reset_time', 0) > 5.0:  # 5 second cooldown
+                        self.blink_detector.reset()
+                        self.blink_detector.last_reset_time = current_time
+                else:
+                    self.blink_detector.reset()
+                    self.blink_detector.last_reset_time = time.time()
+            
+            # Reset external liveness detector
+            from src.emotion import reset_liveness_detector
+            reset_liveness_detector()
+            
+            # Reset verification timer
+            self.verification_start_time = None
+            
+        except Exception as e:
+            print(f"[SPOOF] Error resetting spoof detection: {e}")
     
     def capture_frames(self):
         """Optimized frame capture with async processing pipeline"""
@@ -1888,22 +2007,31 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         current_time = time.time()
                         
                         with self.liveness_state_lock:
-                            # Auto-recover after showing spoof warning for 2 seconds
+                            # Apply hysteresis to reduce flickering
                             if self.last_liveness == 'Spoof':
-                                time_since_detection = current_time - self.last_spoof_detection_time
-                                if time_since_detection > self.SPOOF_WARNING_DISPLAY_TIME:
-                                    # Reset to allow re-verification
-                                    self.last_liveness = 'Real'
-                                    self.last_liveness_confidence = 0.0
-                                    self.spoof_warning_shown = False
-                                    self.verification_start_time = None  # Reset verification timer
-                                    if hasattr(self, 'blink_detector') and self.blink_detector:
-                                        self.blink_detector.reset()
-                                    from src.emotion import reset_liveness_detector
-                                    reset_liveness_detector()
+                                self.consec_spoof_count += 1
+                                self.consec_real_count = 0
+                            elif self.last_liveness == 'Real':
+                                self.consec_real_count += 1
+                                self.consec_spoof_count = 0
                             
-                            is_live = (self.last_liveness == 'Real')
-                            liveness_status = self.last_liveness
+                            # Only change state after CONSEC_REQUIRED consecutive detections
+                            stable_liveness = self.last_liveness
+                            if self.consec_spoof_count >= self.CONSEC_REQUIRED:
+                                stable_liveness = 'Spoof'
+                            elif self.consec_real_count >= self.CONSEC_REQUIRED:
+                                stable_liveness = 'Real'
+                            
+                            # Auto-recover from spoof state only when face changes or after extended timeout
+                            if stable_liveness == 'Spoof':
+                                time_since_detection = current_time - self.last_spoof_detection_time
+                                if time_since_detection > (self.SPOOF_WARNING_DISPLAY_TIME * 3):  # Triple the timeout - 24 seconds
+                                    print("[SPOOF] Auto-recovery: clearing spoof state after extended timeout")
+                                    self.reset_spoof_detection()
+                                    stable_liveness = 'Unknown'
+                            
+                            is_live = (stable_liveness == 'Real')
+                            liveness_status = stable_liveness
 
                         # Check for spoof (thread-safe)
                         if not is_live:
@@ -2074,18 +2202,12 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                             # Check if lock display time has expired
                                             if current_time - self.lock_timestamp > self.LOCK_DISPLAY_TIME:
                                                 # Auto-reset after display timeout
+                                                print("[RESET] Identity lock timeout - preparing for next person")
                                                 self.locked_identity = None
                                                 self.identity_lock_buffer = []
                                                 self.last_identity = "Not Registered"
-                                                # Reset liveness detector and blink state for next verification
-                                                reset_liveness_detector()
-                                                self.verification_start_time = None
-                                                if hasattr(self, 'blink_detector') and self.blink_detector:
-                                                    self.blink_detector.reset()
-                                                # Reset spoof detection state
-                                                self.last_liveness = 'Unknown'
-                                                self.last_liveness_confidence = 0.0
-                                                self.spoof_warning_shown = False
+                                                # Reset detection state for next person
+                                                self.reset_spoof_detection("identity lock timeout")
                                             else:
                                                 # Keep showing locked identity
                                                 self.last_identity = self.locked_identity
@@ -2150,6 +2272,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                                     
                                                     threading.Thread(target=mark_async, daemon=True).start()
                                                     self.last_attendance_message = f"Checked in: {most_verified_name}"
+                                                    
+                                                    # Spoof detection continues for next person - will reset on identity timeout
                                                 else:
                                                     # Still accumulating - show progress
                                                     buffer_age = current_time - min(t for t, _, _ in self.identity_lock_buffer)
@@ -3361,10 +3485,10 @@ Quality Assessment:
                     ear_text += ", ".join([f"{ear:.2f}" for ear in recent_ears])
                     
                     # Add blink status
-                    if current_ear < 0.4:
-                        ear_text += "\n\nSTATUS: EYES CLOSED (EAR < 0.4)"
+                    if current_ear < 0.5:
+                        ear_text += "\n\nSTATUS: EYES CLOSED (EAR < 0.5)"
                     else:
-                        ear_text += "\n\nSTATUS: Eyes open (EAR > 0.4)"
+                        ear_text += "\n\nSTATUS: Eyes open (EAR > 0.5)"
                     
                     # Update text widget
                     self.ear_debug_text.delete(1.0, tk.END)
