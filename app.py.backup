@@ -956,7 +956,7 @@ class AttendanceSystemGUI:
                                       command=self.reset_for_next_user, state=tk.DISABLED, style='Primary.TButton', width=20)
         self.reset_button.pack(side=tk.LEFT, padx=10)
         
-        self.clear_cache_button = ttk.Button(button_container, text="CLEAR CACHE", 
+        self.clear_cache_button = ttk.Button(button_container, text="🗑️ CLEAR CACHE", 
                                            command=self.clear_cache_button_clicked, state=tk.DISABLED, style='Warning.TButton', width=20)
         self.clear_cache_button.pack(side=tk.LEFT, padx=10)
         
@@ -1855,28 +1855,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         except Exception as e:
             print(f"[CACHE] Error clearing cache: {e}")
             messagebox.showerror("Error", f"Failed to clear cache: {str(e)}")
-    def run_debug_analysis(self):
-        """Run debug analysis"""
-        try:
-            if len(employee_db) < 2:
-                messagebox.showinfo("Debug", "Need 2+ employees")
-                return
-            self.analyze_embedding_distribution()
-            messagebox.showinfo("Complete", "Check terminal")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-    def run_debug_analysis(self):
-        """Run debug analysis"""
-        try:
-            if len(employee_db) < 2:
-                messagebox.showinfo("Debug", "Need 2+ employees")
-                return
-            self.analyze_embedding_distribution()
-            messagebox.showinfo("Debug Complete", "Check terminal")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
     
     def reset_for_next_user(self):
         """Reset the system for next user - single person experience"""
