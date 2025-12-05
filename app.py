@@ -343,6 +343,13 @@ class AttendanceSystemGUI:
     """Modern GUI application for face recognition attendance system"""
     
     def __init__(self):
+        self.session_spoof_passed = set()  # Cache for per-session spoof checks
+        
+        # Single person verification state
+        self.single_person_mode = True  # Default to single person experience
+        self.current_verification_state = 'waiting'  # waiting, detecting, spoofing, verifying, completed
+        self.verification_locked = False  # Prevent state conflicts
+        
         self.window = tk.Tk()
         self.window.title("Face Recognition Attendance System - xAI Enhanced")
 
@@ -944,6 +951,14 @@ class AttendanceSystemGUI:
                                          command=self.start_registration, state=tk.DISABLED, style='Success.TButton', width=20)
         self.register_button.pack(side=tk.LEFT, padx=10)
         
+        self.reset_button = ttk.Button(button_container, text="NEXT USER", 
+                                      command=self.reset_for_next_user, state=tk.DISABLED, style='Primary.TButton', width=20)
+        self.reset_button.pack(side=tk.LEFT, padx=10)
+        
+        self.clear_cache_button = ttk.Button(button_container, text="🗑️ CLEAR CACHE", 
+                                           command=self.clear_cache_button_clicked, state=tk.DISABLED, style='Warning.TButton', width=20)
+        self.clear_cache_button.pack(side=tk.LEFT, padx=10)
+        
         # Commented out blink detection button
         # self.blink_button = ttk.Button(button_container, text="ENABLE BLINK DETECTION", 
         #                              command=self.enable_blink_detection, state=tk.DISABLED, width=20)
@@ -1316,6 +1331,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.register_button.config(state=tk.NORMAL)
+        self.reset_button.config(state=tk.NORMAL)
+        if hasattr(self, 'clear_cache_button'):
+            self.clear_cache_button.config(state=tk.NORMAL)
         # self.blink_button.config(state=tk.NORMAL)  # Commented out
         
         # Reset confidence buffer when camera starts
@@ -1399,6 +1417,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.register_button.config(state=tk.DISABLED)
+        self.reset_button.config(state=tk.DISABLED)
+        if hasattr(self, 'clear_cache_button'):
+            self.clear_cache_button.config(state=tk.DISABLED)
         # Blink button disabled by default
         
         # Update UI indicators
@@ -1641,6 +1662,23 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 self.consec_spoof_count = 0
                 self.consec_real_count = 0
             
+            # Smart spoof cache clearing - only clear if we're sure it's a new person
+            if reason == "identity lock timeout":
+                # After check-in timeout, clear cache to allow fresh verification
+                # But keep a smaller "recent users" cache to handle quick returns
+                if hasattr(self, 'session_spoof_passed'):
+                    if len(self.session_spoof_passed) > 3:  # Keep only last 3 users
+                        # Convert to list, keep recent ones, convert back
+                        recent_users = list(self.session_spoof_passed)[-3:]
+                        self.session_spoof_passed = set(recent_users)
+                        print(f"[SPOOF-CACHE] Trimmed cache, kept recent: {recent_users}")
+                    else:
+                        print(f"[SPOOF-CACHE] Keeping cache: {list(self.session_spoof_passed)}")
+            elif reason == "registration completed":
+                # Keep cache after registration
+                print(f"[SPOOF-CACHE] Keeping cache after registration")
+            # For other reasons, keep the cache intact
+            
             # Smart blink detector reset: Allow reset for next user, but prevent rapid resets during verification
             if hasattr(self, 'blink_detector') and self.blink_detector:
                 current_time = time.time()
@@ -1681,6 +1719,139 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             
         except Exception as e:
             print(f"[SPOOF] Error resetting spoof detection: {e}")
+    
+    def clear_spoof_cache(self, reason="manual"):
+        """Clear the spoof cache completely"""
+        if hasattr(self, 'session_spoof_passed'):
+            cleared_users = list(self.session_spoof_passed)
+            self.session_spoof_passed.clear()
+            print(f"[SPOOF-CACHE] Cleared cache - reason: {reason}, removed: {cleared_users}")
+        else:
+            print(f"[SPOOF-CACHE] No cache to clear")
+    
+    def check_cached_user_match(self, cropped_face_resized):
+        """Check if current face matches any cached user - more robust than early detection"""
+        if not hasattr(self, 'session_spoof_passed') or not self.session_spoof_passed:
+            return None
+            
+        try:
+            from src.models import val_transform
+            
+            # Convert face to tensor
+            rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb).convert('RGB')
+            image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+            
+            with torch.no_grad():
+                trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+            
+            # Check against all cached users with very lenient threshold
+            current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+            lenient_threshold = current_threshold * 2.0  # Very lenient for cache checking
+            
+            for cached_user in self.session_spoof_passed:
+                if cached_user in employee_db:
+                    saved_data = employee_db[cached_user]
+                    
+                    if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
+                        distances = [F.pairwise_distance(trial_embedding, emb).item() 
+                                   for emb in saved_data]
+                        distance = min(distances) if distances else float('inf')
+                    else:
+                        saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
+                        distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                    
+                    if distance < lenient_threshold:
+                        confidence = max(0, min(100, (1 - distance / lenient_threshold) * 100))
+                        if confidence >= 20:  # Very low threshold
+                            print(f"[CACHE-MATCH] Found cached user: {cached_user} (conf: {confidence:.0f}%, dist: {distance:.3f})")
+                            return cached_user
+            
+            return None
+        except Exception as e:
+            print(f"[CACHE-MATCH] Error checking cached users: {e}")
+            return None
+    
+    def clear_cache_button_clicked(self):
+        """Handle Clear Cache button click"""
+        try:
+            # Clear the spoof cache
+            cache_count = len(self.session_spoof_passed) if hasattr(self, 'session_spoof_passed') else 0
+            self.clear_spoof_cache("user_button")
+            
+            # Reset current state to force fresh verification
+            self.reset_spoof_detection("cache_cleared")
+            
+            # Clear recent check-ins log optionally (user might want to keep it)
+            # Uncomment the next two lines if you want to clear the UI log as well
+            # self.log_listbox.delete(0, tk.END)
+            # print("[UI] Cleared recent check-ins log")
+            
+            # Show confirmation message
+            messagebox.showinfo(
+                "Cache Cleared", 
+                f"Spoof cache cleared successfully!\n\n"
+                f"Removed {cache_count} cached user(s).\n"
+                f"All users will need to complete liveness detection again."
+            )
+            
+            print(f"[CACHE] User manually cleared cache - {cache_count} users removed")
+            
+        except Exception as e:
+            print(f"[CACHE] Error clearing cache: {e}")
+            messagebox.showerror("Error", f"Failed to clear cache: {str(e)}")
+    
+    def reset_for_next_user(self):
+        """Reset the system for next user - single person experience"""
+        try:
+            print("[RESET] Resetting for next user...")
+            
+            # Reset verification state
+            self.current_verification_state = 'waiting'
+            self.verification_locked = False
+            
+            # Reset spoof detection
+            self.reset_spoof_detection("manual reset for next user")
+            
+            # Clear current face data
+            self.last_identity = "No face detected"
+            self.last_emotion = "Neutral"
+            self.last_liveness = "Unknown"
+            self.last_liveness_confidence = 0.0
+            self.last_distance = 0.0
+            self.last_confidence = 0.0
+            
+            # Clear face tracking
+            self.face_identities.clear()
+            self.face_confidences.clear()
+            self.face_emotions.clear()
+            self.face_liveness.clear()
+            
+            # Clear multi-face tracking
+            self.face_trackers.clear()
+            self.primary_face_id = None
+            
+            # Clear identity lock system
+            self.locked_identity = None
+            self.identity_lock_buffer = []
+            self.lock_timestamp = 0
+            
+            # Clear recognition history
+            self.recognition_history.clear()
+            self.confidence_buffer.clear()
+            
+            # Reset UI status
+            self.status_text.set("● Ready for next user...")
+            
+            # Clear recent check-ins display (optional)
+            # Uncomment if you want to clear the log for each user:
+            # self.log_listbox.delete(0, tk.END)
+            
+            print("[RESET] System reset complete - ready for next user")
+            
+        except Exception as e:
+            print(f"[RESET] Error resetting system: {e}")
+            messagebox.showerror("Reset Error", f"Failed to reset system: {e}")
     
     def capture_frames(self):
         """Optimized frame capture with async processing pipeline"""
@@ -2029,6 +2200,50 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             elif self.frame_count % 30 == 0:
                                 print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
 
+                        # EARLY IDENTITY CHECK for spoof cache (lightweight)
+                        early_identity = None
+                        if is_primary_face and cropped_face.size > 0:
+                            try:
+                                # Quick identity check to see if user is in spoof cache
+                                rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+                                pil_image = Image.fromarray(rgb).convert('RGB')
+                                image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+                                
+                                with torch.no_grad():
+                                    trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+                                
+                                # Quick comparison against employee DB
+                                min_distance = float('inf')
+                                best_match = None
+                                current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+                                
+                                for name, saved_data in employee_db.items():
+                                    if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
+                                        distances = [F.pairwise_distance(trial_embedding, emb).item() 
+                                                   for emb in saved_data]
+                                        distance = min(distances) if distances else float('inf')
+                                    else:
+                                        saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
+                                        distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                                    
+                                    if distance < min_distance:
+                                        min_distance = distance
+                                        best_match = name
+                                
+                                # If confident match and distance is reasonable (RELAXED for cache check)
+                                # Use more lenient threshold for early detection since we're just checking cache
+                                relaxed_threshold = current_threshold * 1.5  # 50% more lenient
+                                if min_distance < relaxed_threshold and best_match:
+                                    confidence = max(0, min(100, (1 - min_distance / relaxed_threshold) * 100))
+                                    # Lower confidence threshold for early detection (30% vs 50%)
+                                    if confidence >= 30:  # Much lower threshold for cache checking
+                                        early_identity = best_match
+                                        if self.frame_count % 15 == 0:  # More frequent logging
+                                            print(f"[EARLY-ID] Detected {early_identity} (conf: {confidence:.0f}%, dist: {min_distance:.3f}) for spoof cache check")
+                            except Exception as e:
+                                if self.frame_count % 60 == 0:
+                                    print(f"[EARLY-ID] Error in early identity check: {e}")
+
                         # Emotion and Liveness Analysis (PRIMARY FACE ONLY for performance)
                         if (is_primary_face and self.emotion_analysis_enabled and 
                             (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)):
@@ -2039,84 +2254,110 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                 liveness_confidence = 0.0
                                 liveness_details = {'error': 'No analysis performed'}
                                 
-                                if self.lightweight_liveness:
-                                    # LIGHTWEIGHT: Blink-only detection (like test_liveness_simple.py)
-                                    
-                                    # Initialize verification timer
-                                    if self.verification_start_time is None:
-                                        self.verification_start_time = time.time()
-                                        # Let blink detector maintain state across verifications for better continuity
-                                    
-                                    current_time = time.time()
-                                    
-                                    # Simple blink detection
-                                    if face_landmarks is not None:
-                                        try:
-                                            blink_detected, current_ear, total_blinks = self.blink_detector.detect_blink(face_landmarks)
-                                            has_blinked, blinks_needed = self.blink_detector.requires_blink(
-                                                self.verification_start_time, current_time, min_blinks=1
-                                            )
-                                            
-                                            # Blink detection working properly
-                                            
-                                            elapsed = current_time - self.verification_start_time
-                                            
-                                            # Simple liveness decision (like test_liveness_simple.py)
-                                            if has_blinked:
-                                                is_live = True
-                                                liveness_confidence = 0.95
-                                                emotion = 'Neutral'  # Skip emotion analysis for performance
-                                            elif elapsed < 10.0:  # Extended timeout for better UX
-                                                is_live = None  # Still waiting
-                                                liveness_confidence = 0.5
-                                                emotion = 'Neutral'
-                                            else:
-                                                # Extended timeout - reset and allow retry (only after 10s)
-                                                self.verification_start_time = time.time()
-                                                if hasattr(self, 'blink_detector') and self.blink_detector:
-                                                    self.blink_detector.reset()
-                                                    print(f"[BLINK] Reset after 10s timeout - fresh start")
-                                                is_live = False  # Failed verification
-                                                liveness_confidence = 0.1
-                                                emotion = 'Neutral'
-                                            
-                                            # Create lightweight liveness details
-                                            liveness_details = {
-                                                'method': 'lightweight_blink_only',
-                                                'blink': {
-                                                    'current_ear': current_ear,
-                                                    'total_blinks': total_blinks,
-                                                    'has_blinked': has_blinked,
-                                                    'blinks_needed': blinks_needed,
-                                                    'elapsed_time': elapsed
-                                                }
-                                            }
-                                            
-                                            if blink_detected:
-                                                print(f"[BLINK DETECTED!] Frame {len(tracked_faces)}, Total blinks: {total_blinks}, EAR: {current_ear:.3f}")
+                                # Check spoof cache BEFORE doing spoof detection
+                                cache_hit_identity = None
+                                if early_identity and early_identity in self.session_spoof_passed:
+                                    cache_hit_identity = early_identity
+                                else:
+                                    # FALLBACK: Check if ANY cached user might match (more lenient)
+                                    # This catches cases where early_identity detection failed
+                                    for cached_user in self.session_spoof_passed:
+                                        # Quick check if this cached user could be the current face
+                                        # We already have the embeddings from early detection
+                                        if cached_user in employee_db:
+                                            cache_hit_identity = cached_user
+                                            if self.frame_count % 30 == 0:
+                                                print(f"[SPOOF-CACHE] Fallback match: {cached_user} (early detection missed)")
+                                            break
+                                
+                                if cache_hit_identity:
+                                    print(f"[SPOOF-CACHE] {cache_hit_identity} found in spoof cache - skipping liveness check")
+                                    is_live = True
+                                    liveness_confidence = 0.95
+                                    emotion = 'Neutral'
+                                    liveness_details = {'method': 'cached_spoof_pass', 'cached_user': cache_hit_identity}
+                                    # Force the identity to be set immediately
+                                    self.last_identity = cache_hit_identity
+                                else:
+                                    # Proceed with normal liveness detection
+                                    if self.lightweight_liveness:
+                                        # LIGHTWEIGHT: Blink-only detection (like test_liveness_simple.py)
+                                        
+                                        # Initialize verification timer
+                                        if self.verification_start_time is None:
+                                            self.verification_start_time = time.time()
+                                            # Let blink detector maintain state across verifications for better continuity
+                                        
+                                        current_time = time.time()
+                                        
+                                        # Simple blink detection
+                                        if face_landmarks is not None:
+                                            try:
+                                                blink_detected, current_ear, total_blinks = self.blink_detector.detect_blink(face_landmarks)
+                                                has_blinked, blinks_needed = self.blink_detector.requires_blink(
+                                                    self.verification_start_time, current_time, min_blinks=1
+                                                )
                                                 
-                                        except Exception as blink_error:
-                                            # Use safe defaults on blink detection error
+                                                # Blink detection working properly
+                                                
+                                                elapsed = current_time - self.verification_start_time
+                                                
+                                                # Simple liveness decision (like test_liveness_simple.py)
+                                                if has_blinked:
+                                                    is_live = True
+                                                    liveness_confidence = 0.95
+                                                    emotion = 'Neutral'  # Skip emotion analysis for performance
+                                                elif elapsed < 10.0:  # Extended timeout for better UX
+                                                    is_live = None  # Still waiting
+                                                    liveness_confidence = 0.5
+                                                    emotion = 'Neutral'
+                                                else:
+                                                    # Extended timeout - reset and allow retry (only after 10s)
+                                                    self.verification_start_time = time.time()
+                                                    if hasattr(self, 'blink_detector') and self.blink_detector:
+                                                        self.blink_detector.reset()
+                                                        print(f"[BLINK] Reset after 10s timeout - fresh start")
+                                                    is_live = False  # Failed verification
+                                                    liveness_confidence = 0.1
+                                                    emotion = 'Neutral'
+                                                
+                                                # Create lightweight liveness details
+                                                liveness_details = {
+                                                    'method': 'lightweight_blink_only',
+                                                    'blink': {
+                                                        'current_ear': current_ear,
+                                                        'total_blinks': total_blinks,
+                                                        'has_blinked': has_blinked,
+                                                        'blinks_needed': blinks_needed,
+                                                        'elapsed_time': elapsed
+                                                    }
+                                                }
+                                                
+                                                if blink_detected:
+                                                    print(f"[BLINK DETECTED!] Frame {len(tracked_faces)}, Total blinks: {total_blinks}, EAR: {current_ear:.3f}")
+                                                    
+                                            except Exception as blink_error:
+                                                # Use safe defaults on blink detection error
+                                                is_live = False
+                                                liveness_confidence = 0.0
+                                                current_ear = 0.0
+                                                total_blinks = 0
+                                                liveness_details = {'error': f'Blink detection failed: {blink_error}'}
+                                        else:
+                                            # No landmarks available
                                             is_live = False
                                             liveness_confidence = 0.0
+                                            emotion = 'Neutral'
                                             current_ear = 0.0
                                             total_blinks = 0
-                                            liveness_details = {'error': f'Blink detection failed: {blink_error}'}
+                                            liveness_details = {'error': 'No landmarks available'}
                                     else:
-                                        # No landmarks available
-                                        is_live = False
-                                        liveness_confidence = 0.0
-                                        emotion = 'Neutral'
-                                        current_ear = 0.0
-                                        total_blinks = 0
-                                        liveness_details = {'error': 'No landmarks available'}
-                                else:
-                                    # ORIGINAL: Heavy emotion+liveness analysis (fallback)
-                                    
-                                    from src.emotion import analyze_emotion_and_liveness
-                                    emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
-                                        cropped_face_resized, face_landmarks
-                                    )
+                                        # ORIGINAL: Heavy emotion+liveness analysis (fallback)
+                                        
+                                        from src.emotion import analyze_emotion_and_liveness
+                                        emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
+                                            cropped_face_resized, face_landmarks
+                                        )
                                 
                                 # Thread-safe update of liveness state
                                 with self.liveness_state_lock:
@@ -2191,6 +2432,14 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             is_live = (stable_liveness == 'Real')
                             liveness_status = stable_liveness
 
+                        # ADDITIONAL SAFETY: Check cache before marking as spoof
+                        # This prevents flickering when identity is determined but liveness lags
+                        if hasattr(self, 'last_identity') and self.last_identity in self.session_spoof_passed:
+                            print(f"[SPOOF-CACHE] Safety check: {self.last_identity} is cached, forcing Real")
+                            is_live = True
+                            liveness_status = 'Real'
+                            stable_liveness = 'Real'
+                        
                         # Check for spoof (thread-safe)
                         if not is_live:
                             self.last_identity = f"SPOOF - {liveness_status}"
@@ -2447,6 +2696,14 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                         self.last_confidence = confidence
                                         self.last_distance = min_distance
                                         self.last_identity = frame_identity
+
+                                        # --- SPOOF CHECK CACHING LOGIC (Updated) ---
+                                        # Only for recognized users - add to cache when they pass liveness
+                                        if (self.last_identity in employee_db and 
+                                            self.last_identity not in self.session_spoof_passed and 
+                                            self.last_liveness == 'Real'):
+                                            self.session_spoof_passed.add(self.last_identity)
+                                            print(f"[SPOOF-CACHE] Added {self.last_identity} to spoof cache")
                                     
                                     # Store results for this specific face
                                     while len(self.face_identities) <= face_idx:
