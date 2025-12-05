@@ -469,6 +469,28 @@ class AttendanceSystemGUI:
         self.TRACKING_DISTANCE_THRESHOLD = 100  # Max distance to consider same face
         self.TRACKER_TIMEOUT_FRAMES = 10  # Remove tracker after N frames without detection
         
+        # ========== MULTI-FACE VERIFICATION SYSTEM ==========
+        # Industry Standard: Primary face gets full processing (liveness + verification)
+        #                   Secondary faces get verification only
+        # TO REVERT: Set ENABLE_MULTI_FACE_VERIFICATION = False
+        self.ENABLE_MULTI_FACE_VERIFICATION = True  # Master feature flag
+        
+        if self.ENABLE_MULTI_FACE_VERIFICATION:
+            self.primary_face_id = None  # Primary face gets full processing
+            self.face_verification_states = {}  # Per-face verification tracking
+            self.face_areas = {}  # Track face sizes for primary selection
+            self.PRIMARY_FACE_SELECTION_FRAMES = 30  # Frames to determine primary face
+            self.primary_selection_counter = 0
+            
+            # Per-face verification tracking (lightweight - only verification, not liveness)
+            self.face_identities_verified = {}  # face_id -> latest verified identity
+            self.face_confidences_verified = {}  # face_id -> latest confidence
+            self.face_verification_history = {}  # face_id -> history of verifications
+            
+            print("[MULTI-FACE] Enhanced multi-face verification enabled (Primary + Secondary)")
+        else:
+            print("[MULTI-FACE] Using legacy multi-face processing")
+        
         # Synchronous blink detection (no threading needed)
         self.face_mesh = face_mesh_detector  # MediaPipe Face Mesh for landmarks
         self.current_landmarks = None  # Store landmarks for blink detection
@@ -611,6 +633,117 @@ class AttendanceSystemGUI:
             # Keep only recent history
             if len(history) > self.SMOOTHING_WINDOW:
                 history.pop(0)
+    
+    def match_landmarks_to_face(self, face_bbox, landmarks_results):
+        """Improved landmark-to-face matching with size and scale consideration."""
+        if not landmarks_results or not landmarks_results.multi_face_landmarks:
+            return None
+        
+        x, y, w, h = face_bbox
+        face_center_x = x + w // 2
+        face_center_y = y + h // 2
+        face_area = w * h
+        
+        best_landmark_match = None
+        best_score = float('inf')  # Lower is better
+        
+        for landmark_set in landmarks_results.multi_face_landmarks:
+            # Get landmark bounding box
+            xs = [lm.x for lm in landmark_set.landmark]
+            ys = [lm.y for lm in landmark_set.landmark]
+            
+            # Convert to pixel coordinates (assuming frame dimensions)
+            frame_h, frame_w = 480, 640  # Standard resolution
+            landmark_xs = [x * frame_w for x in xs]
+            landmark_ys = [y * frame_h for y in ys]
+            
+            # Calculate landmark bounding box
+            lm_min_x, lm_max_x = min(landmark_xs), max(landmark_xs)
+            lm_min_y, lm_max_y = min(landmark_ys), max(landmark_ys)
+            lm_w = lm_max_x - lm_min_x
+            lm_h = lm_max_y - lm_min_y
+            lm_center_x = (lm_min_x + lm_max_x) / 2
+            lm_center_y = (lm_min_y + lm_max_y) / 2
+            lm_area = lm_w * lm_h
+            
+            # Multi-factor matching score
+            center_distance = ((face_center_x - lm_center_x) ** 2 + 
+                             (face_center_y - lm_center_y) ** 2) ** 0.5
+            
+            # Normalize by face size
+            normalized_distance = center_distance / max(w, h)
+            
+            # Size similarity factor (closer to 1.0 is better)
+            size_ratio = min(face_area, lm_area) / max(face_area, lm_area) if max(face_area, lm_area) > 0 else 0
+            
+            # Combined matching score (lower is better)
+            matching_score = normalized_distance + (1.0 - size_ratio)
+            
+            # Only consider if reasonable overlap
+            if normalized_distance < 1.0 and size_ratio > 0.3:  # Must have reasonable overlap and size
+                if matching_score < best_score:
+                    best_score = matching_score
+                    best_landmark_match = landmark_set
+        
+        return best_landmark_match
+    
+    def select_primary_face(self, faces, face_assignments):
+        """Select primary face for intensive processing using multiple criteria."""
+        if not faces:
+            return None
+        
+        current_time = time.time()
+        
+        # Update face areas tracking
+        for i, (x, y, w, h) in enumerate(faces):
+            face_id = face_assignments.get(i, -1)
+            if face_id >= 0:
+                area = w * h
+                self.face_areas[face_id] = area
+        
+        # If we have a current primary face that's still detected, keep it for stability
+        if (self.primary_face_id is not None and 
+            self.primary_face_id in [face_assignments.get(i, -1) for i in range(len(faces))]):
+            # Check if primary face is still reasonably large
+            current_primary_area = self.face_areas.get(self.primary_face_id, 0)
+            largest_area = max(self.face_areas.values()) if self.face_areas else 0
+            
+            # Keep primary if it's at least 70% of the largest face
+            if largest_area > 0 and current_primary_area / largest_area >= 0.7:
+                return self.primary_face_id
+        
+        # Select new primary face based on multiple criteria
+        face_scores = {}
+        frame_center_x, frame_center_y = 320, 240  # Assuming 640x480 frame
+        
+        for i, (x, y, w, h) in enumerate(faces):
+            face_id = face_assignments.get(i, -1)
+            if face_id < 0:
+                continue
+            
+            # Criteria for primary face selection
+            area = w * h
+            center_x, center_y = x + w//2, y + h//2
+            
+            # Distance from frame center (closer is better)
+            center_distance = ((center_x - frame_center_x) ** 2 + (center_y - frame_center_y) ** 2) ** 0.5
+            normalized_center_distance = center_distance / 400  # Normalize by max possible distance
+            
+            # Combined score (higher is better)
+            area_score = area / 10000  # Normalize area
+            centrality_score = 1.0 - min(normalized_center_distance, 1.0)
+            
+            # Weight: 70% area, 30% centrality (configurable)
+            total_score = (0.7 * area_score + 0.3 * centrality_score)
+            face_scores[face_id] = total_score
+        
+        # Select face with highest score
+        if face_scores:
+            new_primary_id = max(face_scores.items(), key=lambda x: x[1])[0]
+            self.primary_face_id = new_primary_id
+            return new_primary_id
+        
+        return None
         
     def setup_styles(self):
         """Setup dark theme TTK styles with high contrast for professional xAI display"""
@@ -1791,6 +1924,17 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             self.multiple_faces_warning = len(faces) > MAX_CONCURRENT_FACES
             faces_to_process = faces[:MAX_CONCURRENT_FACES]
             
+            # Multi-face verification: Select primary face for intensive processing
+            if self.ENABLE_MULTI_FACE_VERIFICATION and len(faces) > 0:
+                try:
+                    selected_primary_id = self.select_primary_face(faces, face_assignments)
+                    if self.frame_count % 30 == 0 and selected_primary_id != self.primary_face_id:
+                        print(f"[PRIMARY] Selected face ID {selected_primary_id} as primary (from {len(faces)} faces)")
+                    self.primary_face_id = selected_primary_id
+                except Exception as e:
+                    print(f"[PRIMARY] Error in face selection, falling back to face 0: {e}")
+                    self.primary_face_id = face_assignments.get(0, 0) if faces else None
+            
             # Debug: Log multi-face processing when multiple faces detected
             if len(faces) > 1 and self.frame_count % 30 == 0:
                 print(f"[MULTI-FACE] Processing {len(faces_to_process)} out of {len(faces)} detected faces")
@@ -1802,8 +1946,24 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
 
             for face_idx, (x, y, w, h) in enumerate(faces_to_process):
                 is_processing_face = face_idx < MAX_CONCURRENT_FACES
-                box_color = (0, 255, 0)  # Green for all processed faces
                 current_face_id = face_assignments.get(face_idx, -1)  # Get tracked face ID
+                
+                # Determine processing type: primary (full) vs secondary (verification only)
+                if self.ENABLE_MULTI_FACE_VERIFICATION:
+                    is_primary_face = (current_face_id == self.primary_face_id)
+                    is_secondary_face = (not is_primary_face and current_face_id >= 0)
+                else:
+                    # Legacy mode: first face is primary, others are secondary
+                    is_primary_face = (face_idx == 0)
+                    is_secondary_face = (face_idx > 0)
+                
+                # Color coding: Primary=Green, Secondary=Orange, Unknown=Red
+                if is_primary_face:
+                    box_color = (0, 255, 0)  # Green for primary
+                elif is_secondary_face:
+                    box_color = (255, 165, 0)  # Orange for secondary
+                else:
+                    box_color = (0, 0, 255)  # Red for untracked
 
                 # Skip verification during registration mode - always show as unregistered
                 if self.registration_mode:
@@ -1825,42 +1985,19 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
                         resize_time = (time.time() - resize_start) * 1000
 
-                        # Extract face landmarks for blink detection
-                        # Try on full frame RGB first (more reliable), fallback to cropped face
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        landmarks_results = face_mesh_detector.process(frame_rgb)
+                        # Extract face landmarks (only for primary face to save performance)
                         face_landmarks = None
-                        
-                        if landmarks_results and landmarks_results.multi_face_landmarks:
-                            # Find the landmark set that corresponds to our current face
-                            best_landmark_match = None
-                            best_distance = float('inf')
+                        if is_primary_face:  # Only primary face gets landmark processing
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            landmarks_results = face_mesh_detector.process(frame_rgb)
                             
-                            # Calculate center of our detected face
-                            face_center_x = x + w // 2
-                            face_center_y = y + h // 2
+                            # Use improved landmark matching
+                            face_landmarks = self.match_landmarks_to_face((x, y, w, h), landmarks_results)
                             
-                            for landmark_set in landmarks_results.multi_face_landmarks:
-                                # Calculate center of this landmark set
-                                nose_landmark = landmark_set.landmark[1]  # Nose tip landmark
-                                landmark_center_x = int(nose_landmark.x * frame.shape[1])
-                                landmark_center_y = int(nose_landmark.y * frame.shape[0])
-                                
-                                # Calculate distance between centers
-                                distance = ((face_center_x - landmark_center_x) ** 2 + 
-                                          (face_center_y - landmark_center_y) ** 2) ** 0.5
-                                
-                                if distance < best_distance:
-                                    best_distance = distance
-                                    best_landmark_match = landmark_set
-                            
-                            # Use the closest landmark set if it's reasonable close
-                            if best_landmark_match and best_distance < max(w, h):  # Within face size
-                                face_landmarks = best_landmark_match
-                                if self.frame_count % 30 == 0:
-                                    print(f"[LANDMARKS] ✓ Matched landmarks to face {face_idx} (distance: {best_distance:.1f})")
+                            if face_landmarks and self.frame_count % 30 == 0:
+                                print(f"[LANDMARKS] ✓ Matched landmarks to primary face {face_idx}")
                             elif self.frame_count % 30 == 0:
-                                print(f"[LANDMARKS] ✗ No close landmark match for face {face_idx} (best distance: {best_distance:.1f})")
+                                print(f"[LANDMARKS] ✗ No landmark match for primary face {face_idx}")
                         
                         # Fallback: try on cropped face if no landmarks found
                         if face_landmarks is None:
@@ -1873,8 +2010,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                             elif self.frame_count % 30 == 0:
                                 print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
 
-                        # Emotion and Liveness Analysis (FIXED - thread-safe)
-                        if self.emotion_analysis_enabled and (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0):
+                        # Emotion and Liveness Analysis (PRIMARY FACE ONLY for performance)
+                        if (is_primary_face and self.emotion_analysis_enabled and 
+                            (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)):
                             try:
                                 # Initialize default values
                                 emotion = 'Neutral'
@@ -2195,8 +2333,8 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     
                                     # ========== IDENTITY LOCK SYSTEM FOR SEAMLESS CHECK-IN ==========
                                     current_time = time.time()
-                                    # Store face-specific identity (for multi-face support)
-                                    if face_idx == 0:  # Only use lock system for first face
+                                    # Store face-specific identity (primary face only for check-in)
+                                    if is_primary_face:  # Only primary face uses identity lock system
                                         # Check if we have a locked identity
                                         if self.locked_identity is not None:
                                             # Check if lock display time has expired
@@ -2299,8 +2437,35 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                                     
                                     self.face_identities[face_idx] = frame_identity
                                     self.face_confidences[face_idx] = confidence
-                                    self.face_emotions[face_idx] = self.last_emotion
-                                    self.face_liveness[face_idx] = self.last_liveness
+                                    
+                                    # Update per-face verification tracking
+                                    if self.ENABLE_MULTI_FACE_VERIFICATION and current_face_id >= 0:
+                                        self.face_identities_verified[current_face_id] = frame_identity
+                                        self.face_confidences_verified[current_face_id] = confidence
+                                        
+                                        # Initialize verification history if needed
+                                        if current_face_id not in self.face_verification_history:
+                                            self.face_verification_history[current_face_id] = []
+                                        
+                                        # Add to verification history
+                                        self.face_verification_history[current_face_id].append({
+                                            'identity': frame_identity,
+                                            'confidence': confidence,
+                                            'timestamp': current_time
+                                        })
+                                        
+                                        # Keep only recent history
+                                        if len(self.face_verification_history[current_face_id]) > 10:
+                                            self.face_verification_history[current_face_id].pop(0)
+                                    
+                                    # Set emotion/liveness based on face type
+                                    if is_primary_face:
+                                        self.face_emotions[face_idx] = self.last_emotion
+                                        self.face_liveness[face_idx] = self.last_liveness
+                                    else:
+                                        # Secondary faces get basic status
+                                        self.face_emotions[face_idx] = "N/A"
+                                        self.face_liveness[face_idx] = "Verified" if confidence > 50 else "Unknown"
                                     
 
                                     
@@ -2351,19 +2516,26 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         self.last_identity = "Face too small"
                         box_color = (0, 0, 255)
 
-                # Display proper label for each face (thread-safe liveness access)
+                # Display proper label for each face with primary/secondary status
                 if face_idx < MAX_CONCURRENT_FACES:
                     if self.registration_mode and face_idx == 0:
                         display_text = "Registering..."
-                    elif face_idx == 0:
+                    elif is_primary_face:
+                        # Primary face gets full status display
                         with self.liveness_state_lock:
-                            display_text = f"{self.last_identity} ({self.last_emotion} | {self.last_liveness})"
-                    else:
-                        # For additional faces, show individual identity with emotion/liveness
+                            display_text = f"PRIMARY: {self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                    elif is_secondary_face:
+                        # Secondary faces get verification-only display
                         if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
-                            face_emotion = self.face_emotions[face_idx] if face_idx < len(self.face_emotions) else "Unknown"
-                            face_liveness = self.face_liveness[face_idx] if face_idx < len(self.face_liveness) else "Unknown"
-                            display_text = f"F{face_idx+1}: {self.face_identities[face_idx]} ({face_emotion}|{face_liveness})"
+                            face_identity = self.face_identities[face_idx]
+                            face_confidence = self.face_confidences[face_idx] if face_idx < len(self.face_confidences) else 0
+                            display_text = f"SEC: {face_identity} ({face_confidence:.0f}%)"
+                        else:
+                            display_text = f"SECONDARY: Processing..."
+                    else:
+                        # Untracked faces
+                        if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
+                            display_text = f"UNTRACKED: {self.face_identities[face_idx]}"
                         else:
                             display_text = f"Face {face_idx+1}: Processing..."
                 else:
@@ -2474,13 +2646,16 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                 cv2.putText(frame, warning_text, (18, th + 14), 
                            font_warn, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
             elif len(faces) > 1:
-                # ENHANCED: Show multi-person verification statistics
-                if hasattr(self, 'current_frame_verifications') and len(self.current_frame_verifications) > 1:
-                    verified_people = [r['best_match'] for r in self.current_frame_verifications 
-                                     if r['confidence'] > CONFIDENCE_REJECTION_THRESHOLD * 100]
-                    unique_people = len(set(verified_people))
-                    info_text = f"✓ {len(faces)} faces: {unique_people} unique people verified"
+                # ENHANCED: Show multi-person verification with primary/secondary breakdown
+                if self.ENABLE_MULTI_FACE_VERIFICATION:
+                    primary_count = 1 if self.primary_face_id is not None else 0
+                    secondary_count = len([fid for fid in self.face_identities_verified.keys() 
+                                         if fid != self.primary_face_id])
+                    verified_people = list(self.face_identities_verified.values())
+                    recognized_count = len([p for p in verified_people if "Not Registered" not in p])
+                    info_text = f"✓ {len(faces)} faces: 1 PRIMARY + {secondary_count} SEC | {recognized_count} recognized"
                 else:
+                    # Fallback to original multi-face display
                     info_text = f"✓ Processing {len(faces)} faces simultaneously"
                     
                 font_info = cv2.FONT_HERSHEY_DUPLEX
