@@ -48,7 +48,7 @@ PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames
 TARGET_FPS = 30
 GUI_WINDOW_WIDTH = 640
 GUI_WINDOW_HEIGHT = 480
-CAMERA_INDEX = 0  # default camera index; app will fallback to others if unavailable
+CAMERA_INDEX = 2  # default camera index; app will fallback to others if unavailable
 
 # ============= Registration Settings =============
 REGISTRATION_MODE_FULL = 6  # number of captures for full registration

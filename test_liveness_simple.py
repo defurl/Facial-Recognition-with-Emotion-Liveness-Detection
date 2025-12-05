@@ -43,7 +43,7 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 if not cap.isOpened():
     print("ERROR: Cannot open camera!")
     sys.exit(1)
-
+X
 frame_count = 0
 fps_list = []
 ear_history = []  # Track EAR values for visualization

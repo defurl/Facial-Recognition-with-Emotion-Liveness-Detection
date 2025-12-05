@@ -1989,9 +1989,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                     if face_idx == 0:  # Only first face for registration
                         self.last_identity = "Registering..."
                         box_color = (255, 165, 0)  # Orange for registration
-                # Process all faces within limit for verification
-                elif is_processing_face and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
-                    print(f"[VERIFICATION] Processing face {face_idx} at frame {self.frame_count}")
+                # CRITICAL FIX: Only process primary face for full identity verification
+                elif is_primary_face and is_processing_face and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
+                    print(f"[VERIFICATION] Processing PRIMARY face {face_idx} at frame {self.frame_count}")
                     # ========== TIMING: Processing Frame ==========
                     process_start = time.time()
                     
@@ -2536,6 +2536,31 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         self.last_identity = "Face too small"
                         box_color = (0, 0, 255)
 
+                # SECONDARY FACE PROCESSING: Basic detection only, no identity verification
+                elif is_secondary_face and is_processing_face and self.frame_count % (self.PROCESS_EVERY_N_FRAMES * 2) == 0:
+                    print(f"[SECONDARY] Processing secondary face {face_idx} (detection only - no identity to prevent flickering)")
+                    # Secondary faces get basic processing - no identity verification to prevent flickering
+                    cropped_face = crop_face_with_padding(frame, x, y, w, h)
+                    if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
+                        # Just mark as detected - no verification to prevent primary face flickering
+                        # Ensure face_identities list is large enough
+                        while len(self.face_identities) <= face_idx:
+                            self.face_identities.append("Processing...")
+                        self.face_identities[face_idx] = "Detected"
+                        # Ensure face_confidences list is large enough
+                        while len(self.face_confidences) <= face_idx:
+                            self.face_confidences.append(0)
+                        self.face_confidences[face_idx] = 0  # No verification = 0% confidence
+                    else:
+                        # Ensure face_identities list is large enough
+                        while len(self.face_identities) <= face_idx:
+                            self.face_identities.append("Processing...")
+                        self.face_identities[face_idx] = "Too Small"
+                        # Ensure face_confidences list is large enough
+                        while len(self.face_confidences) <= face_idx:
+                            self.face_confidences.append(0)
+                        self.face_confidences[face_idx] = 0
+
                 # Display proper label for each face with primary/secondary status
                 if face_idx < MAX_CONCURRENT_FACES:
                     if self.registration_mode and face_idx == 0:
@@ -2549,9 +2574,9 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
                         if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
                             face_identity = self.face_identities[face_idx]
                             face_confidence = self.face_confidences[face_idx] if face_idx < len(self.face_confidences) else 0
-                            display_text = f"SEC: {face_identity} ({face_confidence:.0f}%)"
+                            display_text = f"Others: {face_identity} ({face_confidence:.0f}%)"
                         else:
-                            display_text = f"SECONDARY: Processing..."
+                            display_text = f"Others: Processing..."
                     else:
                         # Untracked faces
                         if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
