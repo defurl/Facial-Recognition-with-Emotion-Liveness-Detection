@@ -64,6 +64,7 @@ from src.runtime.models_loader import load_verification_model
 from src.runtime.db import load_employee_db, build_embedding_index
 from src.runtime.settings import load_gui_threshold, save_gui_threshold
 from src.pipeline.verification import verify_embedding_fast, set_embedding_index
+from src.pipeline.processing import verify_face
 
 # Import performance optimized classes with fallback
 try:
@@ -2505,59 +2506,29 @@ class AttendanceSystemGUI:
                             try:
                                     # ========== TIMING: Face Verification ==========
                                     verification_start = time.time()
-                                    
-                                    # Avoid disk I/O: convert cv2 image to PIL directly
-                                    preprocess_start = time.time()
-                                    rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
-                                    pil_image = Image.fromarray(rgb).convert('RGB')
-                                    image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
-                                    preprocess_time = (time.time() - preprocess_start) * 1000
 
-                                    embedding_start = time.time()
-                                    with torch.no_grad():
-                                        trial_embedding = verification_model(image_tensor, mode='metric')
-                                    embedding_time = (time.time() - embedding_start) * 1000
+                                    verify_res = verify_face(
+                                        cropped_face_resized,
+                                        verification_model,
+                                        val_transform,
+                                        employee_db,
+                                        face_idx=face_idx,
+                                        frame_count=self.frame_count,
+                                        total_faces=len(faces_to_process),
+                                        is_primary_face=is_primary_face,
+                                    )
 
-                                    # Load current threshold (may have been adjusted by user)
-                                    current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
-                                    adjusted_threshold = current_threshold
-                                    if len(employee_db) <= 2:  # Small database - be more strict
-                                        adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
-
-                                    # Fast vectorized comparison against the prebuilt index
-                                    comparison_start = time.time()
-                                    best_match, min_distance, distance_results = verify_embedding_fast(trial_embedding)
-                                    comparison_time = (time.time() - comparison_start) * 1000
-
-                                    if best_match is None:
-                                        min_distance = float('inf')
-                                    best_match_data = employee_db.get(best_match)
+                                    rgb = verify_res["rgb"]
+                                    image_tensor = verify_res["image_tensor"]
+                                    trial_embedding = verify_res["trial_embedding"]
+                                    best_match = verify_res["best_match"]
+                                    best_match_data = verify_res["best_match_data"]
+                                    min_distance = verify_res["min_distance"]
+                                    distance_results = verify_res["distance_results"]
+                                    current_threshold = verify_res["current_threshold"]
+                                    adjusted_threshold = verify_res["adjusted_threshold"]
+                                    confidence = verify_res["confidence"]
                                     self.last_identity = "Not Registered"
-
-                                    # Calculate confidence and prepare result
-                                    confidence = max(0, min(100, (1 - min_distance / current_threshold) * 100))
-                                    
-                                    # DETAILED DEBUGGING: Log all distance comparisons for analysis
-                                    if face_idx == 0 and self.frame_count % 30 == 0:  # Every second
-                                        print(f"\n=== IDENTITY DEBUG (Frame {self.frame_count}) ===")
-                                        print(f"Best match: {best_match or 'None'}")
-                                        print(f"Min distance: {min_distance:.4f}")
-                                        print(f"Current threshold: {current_threshold:.4f}")
-                                        print(f"Adjusted threshold: {current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER:.4f} (small DB)")
-                                        print(f"Confidence: {confidence:.1f}%")
-                                        print(f"Confidence rejection threshold: {CONFIDENCE_REJECTION_THRESHOLD * 100:.1f}%")
-                                        print(f"Database size: {len(employee_db)} employees")
-                                        
-                                        # Show all employee distances for debugging
-                                        print("All distances:")
-                                        for name, dist in distance_results:
-                                            conf = max(0, min(100, (1 - dist / current_threshold) * 100))
-                                            status = "MATCH" if dist < adjusted_threshold else "REJECT"
-                                            print(f"  {name}: dist={dist:.4f}, conf={conf:.1f}% [{status}]")
-                                        print("=" * 50)
-                                    
-                                    if len(employee_db) <= 2 and face_idx == 0 and self.frame_count % 60 == 0:
-                                        print(f"[THRESHOLD-WARNING] Small DB ({len(employee_db)} users) - Using strict threshold: {adjusted_threshold:.4f}")
                                     
                                     # MULTI-PERSON ENHANCEMENT: Store all verification results for conflict resolution
                                     verification_result = {
