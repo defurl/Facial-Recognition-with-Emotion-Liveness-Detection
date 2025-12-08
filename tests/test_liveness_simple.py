@@ -11,6 +11,7 @@ import sys
 import os
 import time
 from pathlib import Path
+import pytest
 
 # Ensure project root and src are on sys.path
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,9 @@ for path in (ROOT, SRC):
         sys.path.insert(0, str_path)
 
 from blink_detector import BlinkDetector
+
+if os.environ.get("PYTEST_CURRENT_TEST"):
+    pytest.skip("Interactive blink demo; skip during pytest collection", allow_module_level=True)
 
 # Initialize - USE ONLY BLINK DETECTOR (no full liveness analysis)
 mp_face_mesh = mp.solutions.face_mesh
@@ -51,7 +55,6 @@ cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 if not cap.isOpened():
     print("ERROR: Cannot open camera!")
     sys.exit(1)
-X
 frame_count = 0
 fps_list = []
 ear_history = []  # Track EAR values for visualization
