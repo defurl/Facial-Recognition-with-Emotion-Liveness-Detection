@@ -62,6 +62,8 @@ from src.explainability import ExplainabilityEngine
 from src.deep_knn import knn_predict_with_confidence, get_knn_explanation_text
 from src.runtime.models_loader import load_verification_model
 from src.runtime.db import load_employee_db, build_embedding_index
+from src.runtime.settings import load_gui_threshold, save_gui_threshold
+from src.pipeline.verification import verify_embedding_fast, set_embedding_index
 
 # Import performance optimized classes with fallback
 try:
@@ -94,58 +96,14 @@ employee_index = None
 employee_offsets = []
 val_transform = None
 # Threshold persistence
-import json
-_GUI_THRESH_FILE = OUTPUT_DIR / 'gui_threshold.json'
-
-def _load_gui_threshold(default_val: float) -> float:
-    try:
-        if _GUI_THRESH_FILE.exists():
-            data = json.loads(_GUI_THRESH_FILE.read_text())
-            val = float(data.get('threshold', default_val))
-            return val
-    except Exception as e:
-        print(f"Warning: could not load GUI threshold: {e}")
-    return default_val
-
-def _save_gui_threshold(value: float) -> None:
-    try:
-        OUTPUT_DIR.mkdir(exist_ok=True)
-        _GUI_THRESH_FILE.write_text(json.dumps({'threshold': float(value)}))
-    except Exception as e:
-        print(f"Warning: could not save GUI threshold: {e}")
-
-OPTIMAL_THRESHOLD_GUI = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+OPTIMAL_THRESHOLD_GUI = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
 
 
 def refresh_employee_index():
     """Rebuild the contiguous embedding index for fast verification."""
     global employee_index, employee_offsets
     employee_index, employee_offsets = build_embedding_index(employee_db)
-
-
-def verify_embedding_fast(trial_embedding: torch.Tensor):
-    """Fast per-identity min-distance lookup using the prebuilt index."""
-    if employee_index is None or not employee_offsets:
-        return None, float("inf"), []
-
-    if trial_embedding.device != employee_index.device:
-        trial_embedding = trial_embedding.to(employee_index.device, non_blocking=True)
-
-    dist_vec = torch.cdist(trial_embedding, employee_index, p=2)[0]
-
-    results = []
-    best_name = None
-    best_dist = float("inf")
-    for name, start, end in employee_offsets:
-        if end <= start:
-            continue
-        slice_min = dist_vec[start:end].min().item()
-        results.append((name, slice_min))
-        if slice_min < best_dist:
-            best_dist = slice_min
-            best_name = name
-
-    return best_name, best_dist, results
+    set_embedding_index(employee_index, employee_offsets)
 
 
 def load_model_and_database():
@@ -1099,7 +1057,7 @@ class AttendanceSystemGUI:
     
     def update_debug_panel(self):
         """Update debug panel with verification details"""
-        threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+        threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
         self.threshold_display.config(text=f"Threshold: {threshold:.3f}")
         
         # Update matched pose
@@ -1112,7 +1070,7 @@ class AttendanceSystemGUI:
         
     def update_debug_display(self):
         """Update debug information display (legacy stats)"""
-        threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+        threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
         debug_text = f"""Recognition Threshold: {threshold:.3f}
                         Process Every N Frames: {self.PROCESS_EVERY_N_FRAMES}
                         Model: {"Loaded" if verification_model else "Not Loaded"}
@@ -1781,7 +1739,7 @@ class AttendanceSystemGUI:
                 trial_embedding = verification_model(image_tensor, mode='metric')
             
             # Check against all cached users with very lenient threshold using vectorized distances
-            current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+            current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
             lenient_threshold = current_threshold * 2.0  # Very lenient for cache checking
 
             best_name, _, distance_results = verify_embedding_fast(trial_embedding)
@@ -1805,7 +1763,7 @@ class AttendanceSystemGUI:
         try:
             print("\n=== EMBEDDING DISTRIBUTION ANALYSIS ===")
             
-            current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+            current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
             print(f"Current threshold: {current_threshold:.4f}")
             
             if len(employee_db) < 2:
@@ -2308,7 +2266,7 @@ class AttendanceSystemGUI:
                                 # Quick comparison against employee DB
                                 min_distance = float('inf')
                                 best_match = None
-                                current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+                                current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                                 
                                 for name, saved_data in employee_db.items():
                                     if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
@@ -2561,7 +2519,7 @@ class AttendanceSystemGUI:
                                     embedding_time = (time.time() - embedding_start) * 1000
 
                                     # Load current threshold (may have been adjusted by user)
-                                    current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+                                    current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                                     adjusted_threshold = current_threshold
                                     if len(employee_db) <= 2:  # Small database - be more strict
                                         adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
@@ -3282,7 +3240,7 @@ class AttendanceSystemGUI:
                 if 0.1 <= new_value <= 3.0:
                     global OPTIMAL_THRESHOLD_GUI
                     OPTIMAL_THRESHOLD_GUI = new_value
-                    _save_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+                    save_gui_threshold(OPTIMAL_THRESHOLD_GUI)
                     self.update_debug_display()
                     messagebox.showinfo("Success", f"✅ Threshold saved! New value: {OPTIMAL_THRESHOLD_GUI:.3f}")
                     dialog.destroy()
