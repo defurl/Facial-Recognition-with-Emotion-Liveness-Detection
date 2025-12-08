@@ -64,7 +64,14 @@ from src.runtime.models_loader import load_verification_model
 from src.runtime.db import load_employee_db, build_embedding_index
 from src.runtime.settings import load_gui_threshold, save_gui_threshold
 from src.pipeline.verification import verify_embedding_fast, set_embedding_index
-from src.pipeline.processing import verify_face, resolve_raw_identity, smooth_identity, update_identity_lock, update_face_lists
+from src.pipeline.processing import (
+    verify_face,
+    resolve_raw_identity,
+    smooth_identity,
+    update_identity_lock,
+    update_face_lists,
+    process_frame_shell,
+)
 from src.pipeline.liveness_adapter import LivenessAdapter
 from src.pipeline.face_processor import (
     FaceProcessor,
@@ -2997,81 +3004,93 @@ Quality Assessment:
             messagebox.showerror("Error", f"Failed to show explanation: {e}")
     
     def process_async_results(self, results, frame):
-        """Process results from async face processor"""
+        """Process async results through the shared process_frame_shell for UI parity."""
         if not results:
             return frame
-        
-        processed_frame = frame.copy()
-        
-        # Clear previous face data
-        self.face_identities.clear()
-        self.face_confidences.clear()
-        self.face_emotions.clear()
-        self.face_liveness.clear()
-        
-        for result in results:
-            face_id = result['face_id']
-            bbox = result['bbox']
-            embedding = result['embedding']
-            is_live = result['is_live']
-            liveness_confidence = result['liveness_confidence']
-            
-            # Process identity using vectorized kNN if available
-            identity = "Processing..."
-            confidence = 0.0
-            distance = 1.0
-            
-            if not is_live:
-                identity = "Spoof Detected"
-                box_color = (0, 0, 255)  # Red
-            elif self.vectorized_knn is not None:
-                try:
-                    predictions, confidences = self.vectorized_knn.predict_batch_with_confidence(
-                        embedding.reshape(1, -1)
-                    )
-                    
-                    if len(predictions) > 0:
-                        prediction = predictions[0]
-                        confidence = confidences[0]
-                        distance = 1.0 - confidence
-                        
-                        # Map prediction to identity name
-                        identity_names = list(employee_db.keys())
-                        if 0 <= prediction < len(identity_names) and confidence >= CONFIDENCE_REJECTION_THRESHOLD:
-                            identity = identity_names[prediction]
-                            box_color = (0, 255, 0)  # Green for recognized
-                            
-                            # Log attendance
-                            self.log_attendance(identity, confidence, "Neutral", "Real")
+
+        processed_frame_holder = {"frame": frame}
+
+        # Pre-index results for quick lookup
+        result_map = {idx: res for idx, res in enumerate(results)}
+
+        def detect_cb(_frame):
+            faces = [res["bbox"] for res in results]
+            return {
+                "faces": faces,
+                "face_assignments": {idx: res.get("face_id", idx) for idx, res in enumerate(results)},
+            }
+
+        def process_cb(_frame, face_idx, bbox, context):
+            res = dict(result_map.get(face_idx, {}))
+            res.setdefault("face_idx", face_idx)
+            res.setdefault("bbox", bbox)
+            return res
+
+        def update_ui_cb(_frame, per_face_results, context):
+            processed_frame = _frame.copy()
+
+            # Clear previous face data
+            self.face_identities.clear()
+            self.face_confidences.clear()
+            self.face_emotions.clear()
+            self.face_liveness.clear()
+
+            for res in per_face_results:
+                face_id = res.get("face_id", res.get("face_idx", 0))
+                bbox = res.get("bbox", (0, 0, 0, 0))
+                embedding = res.get("embedding")
+                is_live = res.get("is_live", False)
+
+                identity = "Processing..."
+                confidence = 0.0
+
+                if not is_live:
+                    identity = "Spoof Detected"
+                    box_color = (0, 0, 255)
+                elif self.vectorized_knn is not None and embedding is not None:
+                    try:
+                        predictions, confidences = self.vectorized_knn.predict_batch_with_confidence(
+                            embedding.reshape(1, -1)
+                        )
+                        if len(predictions) > 0:
+                            prediction = predictions[0]
+                            confidence = confidences[0]
+                            identity_names = list(employee_db.keys())
+                            if 0 <= prediction < len(identity_names) and confidence >= CONFIDENCE_REJECTION_THRESHOLD:
+                                identity = identity_names[prediction]
+                                box_color = (0, 255, 0)
+                                self.log_attendance(identity, confidence, "Neutral", "Real")
+                            else:
+                                identity = "Not Registered"
+                                box_color = (0, 165, 255)
                         else:
                             identity = "Not Registered"
-                            box_color = (0, 165, 255)  # Orange for unknown
-                    
-                except Exception as e:
-                    print(f"[VECTORIZED KNN ERROR] {e}")
-                    identity = "Error"
-                    box_color = (0, 0, 255)  # Red for error
-            else:
-                identity = "Not Registered"
-                box_color = (0, 165, 255)  # Orange
-            
-            # Store results for UI display
-            self.face_identities[face_id] = identity
-            self.face_confidences[face_id] = confidence
-            self.face_emotions[face_id] = result.get('emotion', 'Neutral')
-            self.face_liveness[face_id] = 'Real' if is_live else 'Spoof'
-            
-            # Draw bounding box and label
-            x, y, w, h = bbox
-            cv2.rectangle(processed_frame, (x, y), (x + w, y + h), box_color, 2)
-            
-            emotion = result.get('emotion', 'Neutral')
-            liveness = 'Real' if is_live else 'Spoof'
-            display_text = f"{identity} ({emotion} | {liveness})"
-            cv2.putText(processed_frame, display_text, (x, y - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
-        
-        return processed_frame
+                            box_color = (0, 165, 255)
+                    except Exception as e:
+                        print(f"[VECTORIZED KNN ERROR] {e}")
+                        identity = "Error"
+                        box_color = (0, 0, 255)
+                else:
+                    identity = "Not Registered"
+                    box_color = (0, 165, 255)
+
+                self.face_identities.append(identity)
+                self.face_confidences.append(confidence)
+                self.face_emotions.append(res.get("emotion", "Neutral"))
+                self.face_liveness.append("Real" if is_live else "Spoof")
+
+                x, y, w, h = bbox
+                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), box_color, 2)
+                emotion = res.get("emotion", "Neutral")
+                liveness = "Real" if is_live else "Spoof"
+                display_text = f"{identity} ({emotion} | {liveness})"
+                cv2.putText(processed_frame, display_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+
+            processed_frame_holder["frame"] = processed_frame
+            self.queue_frame_for_display(processed_frame)
+
+        process_frame_shell(frame, detect_faces_cb=detect_cb, process_face_cb=process_cb, update_ui_cb=update_ui_cb)
+        return processed_frame_holder["frame"]
     
     def queue_frame_for_display(self, frame):
         """Queue frame for display with error handling"""
