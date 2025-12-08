@@ -5,7 +5,15 @@ Tests all core modules: detection, quality checks, emotion, liveness, embedding,
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+# Ensure project root and src are on sys.path
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+for path in (ROOT, SRC):
+    str_path = str(path)
+    if str_path not in sys.path:
+        sys.path.insert(0, str_path)
+
 import os
 # fix duplicate OpenMP runtime on Windows (libiomp5md.dll)
 # set before importing libraries that load OpenMP (e.g., torch, cv2)

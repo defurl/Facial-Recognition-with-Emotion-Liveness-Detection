@@ -1,6 +1,28 @@
+import os
 import time
+from pathlib import Path
 
 import pytest
+
+# Silence TensorFlow/absl noise in these unit tests
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("GLOG_minloglevel", "2")
+try:
+    import absl.logging as absl_logging
+
+    absl_logging.set_verbosity(absl_logging.ERROR)
+except Exception:
+    pass
+
+# Ensure project root and src are on sys.path for imports
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+for path in (ROOT, SRC):
+    str_path = str(path)
+    if str_path not in sys.path:
+        sys.path.insert(0, str_path)
 
 from src.pipeline.processing import (
     resolve_raw_identity,

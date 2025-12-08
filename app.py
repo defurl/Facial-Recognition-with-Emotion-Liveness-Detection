@@ -78,737 +78,666 @@ try:
 except ImportError as e:
     print(f"[INFO] Optimized core not available: {e} - using standard processing")
     OPTIMIZED_CORE_AVAILABLE = False
-    # Fallback classes
-    class AsyncFaceProcessor: 
-        def cleanup(self): pass
-        async def process_frame_async(self, frame): return []
-    class VectorizedKNN: 
-        def predict_batch_with_confidence(self, embeddings): return [], []
-    class VectorizedLivenessDetector: pass
-    class MemoryPool: pass
-    class PerformanceMonitor:
-        def log_timing(self, name, time_ms): pass
-        def get_stats(self): return {}
-    def create_optimized_pipeline(*args): return None, None
+            # ========== LEGACY PROCESSING (Fallback) ==========
+            detect_start = time.time()
+            faces = detect_faces(frame)
+            detect_time = (time.time() - detect_start) * 1000
 
-# Global variables
-verification_model = None
-employee_db = {}
-employee_index = None
-employee_offsets = []
-val_transform = None
-# Threshold persistence
-OPTIMAL_THRESHOLD_GUI = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+            face_assignments = self.update_face_tracking(faces)
+            if self.frame_count % 30 == 0:
+                print(f"[LEGACY] Face Detection: {detect_time:.2f}ms | Faces: {len(faces)} | Tracked: {len(self.face_trackers)}")
 
+            h, w = frame.shape[:2]
+            self.multiple_faces_warning = len(faces) > MAX_CONCURRENT_FACES
+            faces_to_process = faces[:MAX_CONCURRENT_FACES]
 
-def refresh_employee_index():
-    """Rebuild the contiguous embedding index for fast verification."""
-    global employee_index, employee_offsets
-    employee_index, employee_offsets = build_embedding_index(employee_db)
-    set_embedding_index(employee_index, employee_offsets)
-
-
-def load_model_and_database():
-    """Load the trained model and employee database"""
-    global verification_model, employee_db, val_transform, employee_index, employee_offsets
-    
-    print("Loading model and database...")
-    
-    # Load model
-    verification_model = load_verification_model(MODEL_METRIC_PATH, DEVICE, num_classes=4000)
-    if MODEL_METRIC_PATH.exists():
-        print(f"[OK] Loaded model from {MODEL_METRIC_PATH}")
-    else:
-        print(f"[WARNING] Model not found at {MODEL_METRIC_PATH}")
-        print("  Please train the model first using: python scripts/train_metric.py")
-    
-    # Load transforms
-    _, val_transform = get_transforms()
-    
-    # Load database
-    employee_db = load_employee_db(EMPLOYEE_DB_PATH)
-    if employee_db:
-        print(f"[OK] Loaded {len(employee_db)} employees from database")
-        for name in employee_db:
-            print(f"    - {name}")
-    else:
-        print("[INFO] No existing employee database. Starting fresh.")
-    refresh_employee_index()
-
-
-def select_primary_face(faces, frame_width, frame_height, previous_primary_idx=-1, previous_bbox=None):
-    """
-    Select primary face from multiple detections using area and centeredness scoring
-    with temporal stability to prevent flickering.
-    
-    Args:
-        faces: List of (x, y, w, h) face bounding boxes
-        frame_width: Frame width in pixels
-        frame_height: Frame height in pixels
-        previous_primary_idx: Index of primary face from previous frame (-1 if none)
-        previous_bbox: Bounding box (x, y, w, h) of previous primary face
-    
-    Returns:
-        int: Index of primary face, or -1 if no faces
-    """
-    if not faces or len(faces) == 0:
-        return -1
-    
-    if len(faces) == 1:
-        return 0
-    
-    try:
-        # Calculate frame center
-        frame_center_x = frame_width / 2
-        frame_center_y = frame_height / 2
-        frame_diagonal = (frame_width**2 + frame_height**2) ** 0.5
-        
-        # Find largest face area for normalization
-        max_area = 0
-        for x, y, w, h in faces:
-            area = w * h
-            if area > max_area:
-                max_area = area
-        
-        # Helper function to calculate IoU (Intersection over Union)
-        def calculate_iou(box1, box2):
-            x1, y1, w1, h1 = box1
-            x2, y2, w2, h2 = box2
-            
-            # Calculate intersection
-            x_left = max(x1, x2)
-            y_top = max(y1, y2)
-            x_right = min(x1 + w1, x2 + w2)
-            y_bottom = min(y1 + h1, y2 + h2)
-            
-            if x_right < x_left or y_bottom < y_top:
-                return 0.0
-            
-            intersection = (x_right - x_left) * (y_bottom - y_top)
-            union = w1 * h1 + w2 * h2 - intersection
-            
-            return intersection / union if union > 0 else 0.0
-        
-        # Score each face
-        scores = []
-        for idx, (x, y, w, h) in enumerate(faces):
-            area = w * h
-            
-            # Area score (normalized)
-            area_score = area / max_area if max_area > 0 else 0.0
-            
-            # Centeredness score (distance from center, inverted)
-            face_center_x = x + w / 2
-            face_center_y = y + h / 2
-            distance_from_center = ((face_center_x - frame_center_x)**2 + 
-                                   (face_center_y - frame_center_y)**2) ** 0.5
-            center_score = 1.0 - (distance_from_center / frame_diagonal)
-            center_score = max(0.0, center_score)
-            
-            # Weighted combination (80% area, 20% centeredness) - increased area weight for stability
-            final_score = 0.8 * area_score + 0.2 * center_score
-            
-            # Add hysteresis bonus: if this face was previously primary and still present, give it a boost
-            if previous_bbox is not None:
-                iou = calculate_iou((x, y, w, h), previous_bbox)
-                if iou > 0.5:  # Same face detected (IoU > 50%)
-                    # Add significant stability bonus (20% boost)
-                    final_score *= 1.20
-            
-            scores.append(final_score)
-        
-        # Return index of highest scoring face
-        primary_idx = scores.index(max(scores))
-        
-        # Debug: Print scoring details when multiple faces
-        if len(faces) > 1:
-            print(f"[DEBUG] Primary face selection: {len(faces)} faces detected")
-            for idx, score in enumerate(scores):
-                area = faces[idx][2] * faces[idx][3]
-                print(f"  Face {idx}: score={score:.3f}, area={area} {'<-- PRIMARY' if idx == primary_idx else ''}")
-        
-        return primary_idx
-    except Exception as e:
-        print(f"Error selecting primary face: {e}")
-        return -1 if not faces else 0
-
-
-def draw_rounded_rectangle(img, pt1, pt2, color, thickness=2, radius=15):
-    """Draw a rectangle with rounded corners for modern UI look"""
-    x1, y1 = pt1
-    x2, y2 = pt2
-    
-    if thickness < 0:  # Filled
-        # Draw filled rectangles and circles for rounded corners
-        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
-        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
-        cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
-    else:  # Outline
-        # Draw lines with rounded corners
-        cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness)
-        cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness)
-        cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness)
-        cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness)
-        cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness)
-        cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness)
-
-
-def draw_ear_graph(frame, ear_history, ear_threshold=0.5):
-    """Draw EAR (Eye Aspect Ratio) graph overlay for blink detection debugging"""
-    if len(ear_history) < 1:
-        return
-    
-    # Draw background even with minimal data
-    if len(ear_history) < 2:
-        # Just draw the graph background with "Collecting data..." message
-        h, w = frame.shape[:2]
-        graph_x = 10
-        graph_y = h - 130
-        graph_w = 300
-        graph_h = 120
-        cv2.rectangle(frame, (graph_x, graph_y), 
-                     (graph_x + graph_w, graph_y + graph_h), 
-                     (20, 20, 20), -1)
-        cv2.rectangle(frame, (graph_x, graph_y), 
-                     (graph_x + graph_w, graph_y + graph_h), 
-                     (100, 100, 100), 2)
-        cv2.putText(frame, "EAR Graph - Collecting data...", (graph_x + 5, graph_y + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        return
-    
-    h, w = frame.shape[:2]
-    
-    # Graph dimensions (positioned at bottom-left corner)
-    graph_x = 10
-    graph_y = h - 130
-    graph_w = 300
-    graph_h = 120
-    
-    # Background
-    cv2.rectangle(frame, (graph_x, graph_y), 
-                 (graph_x + graph_w, graph_y + graph_h), 
-                 (20, 20, 20), -1)
-    cv2.rectangle(frame, (graph_x, graph_y), 
-                 (graph_x + graph_w, graph_y + graph_h), 
-                 (100, 100, 100), 2)
-    
-    # Threshold line
-    threshold_y = int(graph_y + graph_h - (ear_threshold / 0.8 * graph_h))  # Scale: 0-0.8
-    cv2.line(frame, (graph_x, threshold_y), 
-            (graph_x + graph_w, threshold_y), 
-            (0, 255, 255), 2)
-    cv2.putText(frame, f"Threshold: {ear_threshold:.2f}", (graph_x + 5, threshold_y - 5), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
-    
-    # Plot EAR values
-    for i in range(1, len(ear_history)):
-        x1 = graph_x + int((i - 1) * graph_w / 150)
-        x2 = graph_x + int(i * graph_w / 150)
-        
-        # Scale EAR to graph (0-0.8 range)
-        y1 = graph_y + graph_h - int(min(ear_history[i-1], 0.8) / 0.8 * graph_h)
-        y2 = graph_y + graph_h - int(min(ear_history[i], 0.8) / 0.8 * graph_h)
-        
-        # Color: green=open, red=closed
-        line_color = (0, 255, 0) if ear_history[i] > ear_threshold else (0, 0, 255)
-        cv2.line(frame, (x1, y1), (x2, y2), line_color, 2)
-    
-    # Labels
-    current_ear = ear_history[-1] if ear_history else 0.0
-    ear_color = (0, 255, 0) if current_ear > ear_threshold else (0, 0, 255)
-    cv2.putText(frame, "EAR Over Time", (graph_x + 5, graph_y + 15), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    cv2.putText(frame, f"Current: {current_ear:.3f}", (graph_x + 5, graph_y + 30), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, ear_color, 1)
-
-
-def interpolate_color(color1, color2, factor):
-    """Smoothly interpolate between two colors for transitions"""
-    return tuple(int(c1 + (c2 - c1) * factor) for c1, c2 in zip(color1, color2))
-
-
-class AttendanceSystemGUI:
-    """Modern GUI application for face recognition attendance system"""
-    
-    def __init__(self):
-        self.session_spoof_passed = set()  # Cache for per-session spoof checks
-        
-        # Single person verification state
-        self.single_person_mode = True  # Default to single person experience
-        self.current_verification_state = 'waiting'  # waiting, detecting, spoofing, verifying, completed
-        self.verification_locked = False  # Prevent state conflicts
-        
-        self.window = tk.Tk()
-        self.window.title("Face Recognition Attendance System - xAI Enhanced")
-
-        # Fullscreen / maximize: handle cross-platform safely
-        try:
-            import platform
-            if platform.system() == 'Windows':
-                # Maximized window on Windows
+            if self.ENABLE_MULTI_FACE_VERIFICATION and len(faces) > 0:
                 try:
-                    self.window.state('zoomed')
-                except Exception:
-                    pass
-            else:
-                # On many Linux window managers the '-zoomed' attribute works.
-                # Try it, but don't raise if unsupported (avoids TclError).
-                try:
-                    self.window.attributes('-zoomed', True)
-                except Exception:
-                    # Fallback: don't force maximize on unknown platforms
-                    pass
-        except Exception:
-            # Be conservative: if platform detection fails, skip maximizing
-            pass
+                    selected_primary_id = self.select_primary_face(faces, face_assignments)
+                    if self.frame_count % 30 == 0 and selected_primary_id != self.primary_face_id:
+                        print(f"[PRIMARY] Selected face ID {selected_primary_id} as primary (from {len(faces)} faces)")
+                    self.primary_face_id = selected_primary_id
+                except Exception as e:
+                    print(f"[PRIMARY] Error in face selection, falling back to face 0: {e}")
+                    self.primary_face_id = face_assignments.get(0, 0) if faces else None
 
-        self.window.minsize(1400, 900)
-        self.window.configure(bg='#0d1117')  # Dark theme background
-        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Enable F11 toggle fullscreen
-        self.window.bind('<F11>', lambda e: self.toggle_fullscreen())
-        self.window.bind('<Escape>', lambda e: self.window.attributes('-fullscreen', False))
-        self.fullscreen = False
-        
-        # Configure styles
-        self.setup_styles()
-        
-        # Core state
-        self.cap = None
-        self.running = False
-        self.multiple_faces_warning = False
-        
-        # Processing control - optimized for performance
-        self.frame_count = 0
-        self.PROCESS_EVERY_N_FRAMES = max(5, PROCESS_EVERY_N_FRAMES)  # Process every 5 frames
-        self.EMOTION_EVERY_N_FRAMES = 5  # Process emotion/liveness every 5 frames
-        self.last_processed_frame = 0
-        
-        # Multi-face tracking for concurrent processing
-        self.face_identities = []  # Store identity for each processed face
-        self.face_confidences = []  # Store confidence for each processed face
-        self.face_emotions = []  # Store emotion for each processed face
-        self.face_liveness = []  # Store liveness for each processed face
-        
-        # Identity lock system for seamless check-in
-        self.identity_lock_buffer = []  # List of (timestamp, identity, confidence) tuples
-        self.LOCK_DURATION = 2.0  # Accumulate verifications for 2 seconds (real time) - reduced for faster check-in
-        self.LOCK_MIN_VERIFICATIONS = 3  # Require 3 verifications for check-in - reduced for faster response
-        self.locked_identity = None  # Currently locked identity
-        self.lock_timestamp = 0  # When the identity was locked
-        self.LOCK_DISPLAY_TIME = 2.0  # Show locked identity for 2 seconds before auto-reset
-        
-        # Phase 8: Attendance logger
-        self.attendance_logger = AttendanceLogger(
-            csv_path=OUTPUT_DIR / 'attendance_log.csv',
-            cooldown_minutes=60
-        )
-        self.last_attendance_message = ""
-        self.attendance_attempt_cache = {}  # Track last attempt time per person to prevent repeated I/O
-        
-        # Registration state tracking
-        self.registration_mode = False
-        self.registration_name = ""
-        self.registration_state = None  # Will hold state machine data during registration
-        self.registration_feedback = ""  # Persistent feedback message
-        self.registration_feedback_color = (255, 165, 0)  # Default orange
-        
-        # Thread-safe queue for frames - optimized queue size
-        self.frame_queue = queue.Queue(maxsize=1)  # Smaller queue to reduce lag
-        
-        # Camera lock to prevent race conditions
-        self.camera_lock = threading.Lock()
-        
-        # Thread safety locks
-        self.emotion_lock = threading.Lock()
-        self.liveness_lock = threading.Lock()
-        self.liveness_state_lock = threading.RLock()  # NEW: Protect liveness state variables
-        
-        # Emotion analysis failure tracking for graceful degradation
-        self.emotion_failure_count = 0
-        self.emotion_analysis_enabled = True  # Auto-enable for lightweight liveness detection
-        
-        # Initialize missing attributes
-        self.confidence_buffer = []
-        self.no_face_frames = 0
-        # Last-known display values (prevent AttributeError when display updates run before first detection)
-        self.last_identity = "No face detected"
-        self.last_emotion = "Neutral"
-        self.last_liveness = "Unknown"
-        self.last_liveness_confidence = 0.0
-        self.last_distance = 0.0
-        self.last_confidence = 0.0
-        
-        # Recognition smoothing to reduce flickering
-        self.recognition_history = []  # Store last N recognition results
-        self.SMOOTHING_WINDOW = 7  # Increased from 3 to 7 for better stability
-        
-        # Missing attributes initialization
-        self.matched_pose_index = -1  # Initialize pose matching index
-        self.ear_canvas = None  # Will be set during UI setup
-        
-        # EAR detection optimization - Balanced thresholds for reliable blink detection
-        self.ear_threshold = 0.45  # Optimized threshold based on your data (was 0.5)
-        from collections import deque
-        self.ear_history = deque(maxlen=50)  # Store last 50 EAR values (~1.5 seconds at 30fps)
-        self.ear_lock = threading.Lock()  # Thread safety for EAR data
-        self.ear_baseline = 0.55  # Expected open-eye EAR baseline
-        self.ear_blink_sensitivity = 0.75  # Sensitivity multiplier (0.45 = 0.55 * 0.75)
-        self.current_ear = 0.0  # Current EAR value
-        self.current_blinks = 0  # Current blink count
-        
-        # Face tracking for consistent identity assignment
-        self.face_trackers = {}  # Track face positions across frames
-        self.next_face_id = 0
-        self.TRACKING_DISTANCE_THRESHOLD = 100  # Max distance to consider same face
-        self.TRACKER_TIMEOUT_FRAMES = 10  # Remove tracker after N frames without detection
-        
-        # ========== MULTI-FACE VERIFICATION SYSTEM ==========
-        # Industry Standard: Primary face gets full processing (liveness + verification)
-        #                   Secondary faces get verification only
-        # TO REVERT: Set ENABLE_MULTI_FACE_VERIFICATION = False
-        self.ENABLE_MULTI_FACE_VERIFICATION = True  # Master feature flag
-        
-        if self.ENABLE_MULTI_FACE_VERIFICATION:
-            self.primary_face_id = None  # Primary face gets full processing
-            self.face_verification_states = {}  # Per-face verification tracking
-            self.face_areas = {}  # Track face sizes for primary selection
-            self.PRIMARY_FACE_SELECTION_FRAMES = 30  # Frames to determine primary face
-            self.primary_selection_counter = 0
-            
-            # Per-face verification tracking (lightweight - only verification, not liveness)
-            self.face_identities_verified = {}  # face_id -> latest verified identity
-            self.face_confidences_verified = {}  # face_id -> latest confidence
-            self.face_verification_history = {}  # face_id -> history of verifications
-            
-            print("[MULTI-FACE] Enhanced multi-face verification enabled (Primary + Secondary)")
-        else:
-            print("[MULTI-FACE] Using legacy multi-face processing")
-        
-        # Synchronous blink detection (no threading needed)
-        self.face_mesh = face_mesh_detector  # MediaPipe Face Mesh for landmarks
-        self.current_landmarks = None  # Store landmarks for blink detection
-        
-        # Initialize lightweight blink detector and liveness system
-        self.blink_detector = BlinkDetector()
-        self.liveness_adapter = LivenessAdapter(use_blink_only=True)
-        self.verification_start_time = None
-        self.lightweight_liveness = True  # Default to lightweight mode
-        
-        # Spoof detection state tracking
-        self.last_spoof_detection_time = 0
-        self.SPOOF_WARNING_DISPLAY_TIME = 8.0  # Show spoof warning for 8 seconds (increased)
-        self.spoof_warning_shown = False  # Track if warning has been shown
-        self.last_emotion_check_frame = 0
-        
-        # Hysteresis for liveness (reduce flicker from single-frame noise)
-        self.consec_spoof_count = 0
-        self.consec_real_count = 0
-        self.CONSEC_REQUIRED = 6  # Require 6 consecutive same results before declaring spoof (increased)
-        
-        # EAR (Eye Aspect Ratio) tracking for blink detection visualization
-        from collections import deque
-        self.ear_history = deque(maxlen=150)  # Store last 150 EAR values (~5 seconds at 30fps)
-        self.ear_threshold = 0.5  # Blink detection threshold
-        self.ear_lock = threading.Lock()  # Thread safety for EAR data
-        self.ear_graph_overlay = None  # Cached graph image
-        self.ear_graph_update_counter = 0  # Update graph every N frames
-        
-        # Recognition statistics
-        self.recognition_stats = {
-            'total_detections': 0,
-            'successful_recognitions': 0,
-            'unique_faces_today': set()
-        }
-        
-        # xAI: Explainability engine
-        self.explainer = None  # Initialize after model loads
-        self.current_face_tensor = None  # Store current face for explanation
-        self.current_face_image = None  # Store current face image
-        self.current_explanation = None  # Store current explanation data
-        self.knn_neighbors = None  # Store kNN neighbor info
-        
-        # Performance optimized processing pipeline
-        self.async_processor = None  # Initialize after model loads
-        self.vectorized_knn = None  # Initialize after database loads
-        self.performance_monitor = PerformanceMonitor()
-        self.processing_batch_buffer = []
-        self.batch_processing_active = False
-        
-        # Animation states for smooth transitions
-        self.verification_animation = {
-            'active': False,
-            'type': None,  # 'success' or 'failure'
-            'frame_count': 0,
-            'max_frames': 30  # ~1 second at 30fps
-        }
-        self.box_color_transition = {
-            'current_color': (128, 128, 128),
-            'target_color': (128, 128, 128),
-            'frame': 0,
-            'transition_frames': 10
-        }
-        
-        self.setup_ui()
+            if len(faces) > 1 and self.frame_count % 30 == 0:
+                print(f"[MULTI-FACE] Processing {len(faces_to_process)} out of {len(faces)} detected faces")
+                for i, (fx, fy, fw, fh) in enumerate(faces):
+                    face_id = face_assignments.get(i, -1)
+                    print(f"  Face {i} (ID:{face_id}): bbox=({fx}, {fy}, {fw}, {fh}) center=({fx + fw//2}, {fy + fh//2}) area={fw*fh}")
+            elif len(faces) == 0 and self.frame_count % 60 == 0:
+                print(f"[FACE-DETECT] No faces detected at frame {self.frame_count}")
 
-    def update_face_tracking(self, face_positions):
-        """Update face tracking to maintain consistent IDs across frames."""
-        current_time = time.time()
-        
-        # Clean up expired trackers
-        expired_ids = []
-        for face_id, tracker in self.face_trackers.items():
-            if current_time - tracker['last_seen'] > self.TRACKER_TIMEOUT_FRAMES / 30.0:  # Assuming 30fps
-                expired_ids.append(face_id)
-        
-        for face_id in expired_ids:
-            del self.face_trackers[face_id]
-        
-        # Calculate center positions for detected faces
-        detected_centers = []
-        for i, (x, y, w, h) in enumerate(face_positions):
-            center_x = x + w // 2
-            center_y = y + h // 2
-            detected_centers.append((center_x, center_y))
-        
-        # Assign consistent IDs to detected faces
-        face_assignments = {}
-        unassigned_faces = list(range(len(detected_centers)))
-        
-        # First pass: match to existing trackers
-        for face_id, tracker in list(self.face_trackers.items()):
-            best_match = None
-            best_distance = float('inf')
-            
-            for i in unassigned_faces:
-                distance = ((detected_centers[i][0] - tracker['center'][0]) ** 2 + 
-                           (detected_centers[i][1] - tracker['center'][1]) ** 2) ** 0.5
-                
-                if distance < self.TRACKING_DISTANCE_THRESHOLD and distance < best_distance:
-                    best_match = i
-                    best_distance = distance
-            
-            if best_match is not None:
-                # Update existing tracker
-                self.face_trackers[face_id]['center'] = detected_centers[best_match]
-                self.face_trackers[face_id]['last_seen'] = current_time
-                face_assignments[best_match] = face_id
-                unassigned_faces.remove(best_match)
-        
-        # Second pass: create new trackers for unassigned faces
-        for i in unassigned_faces:
-            face_id = self.next_face_id
-            self.next_face_id += 1
-            
-            self.face_trackers[face_id] = {
-                'center': detected_centers[i],
-                'last_seen': current_time,
-                'recognition_history': []
+            detection_ctx = {
+                "faces": faces_to_process,
+                "all_faces": faces,
+                "face_assignments": face_assignments,
             }
-            face_assignments[i] = face_id
-        
-        return face_assignments
-    
-    def get_face_recognition_history(self, face_id):
-        """Get recognition history for a specific face ID."""
-        if face_id in self.face_trackers:
-            return self.face_trackers[face_id]['recognition_history']
-        return []
-    
-    def update_face_recognition(self, face_id, identity, confidence):
-        """Update recognition result for a specific face ID."""
-        if face_id in self.face_trackers:
-            history = self.face_trackers[face_id]['recognition_history']
-            history.append({
-                'identity': identity,
-                'confidence': confidence,
-                'timestamp': time.time()
-            })
-            
-            # Keep only recent history
-            if len(history) > self.SMOOTHING_WINDOW:
-                history.pop(0)
-    
-    def match_landmarks_to_face(self, face_bbox, landmarks_results):
-        """Improved landmark-to-face matching with size and scale consideration."""
-        if not landmarks_results or not landmarks_results.multi_face_landmarks:
-            return None
-        
-        x, y, w, h = face_bbox
-        face_center_x = x + w // 2
-        face_center_y = y + h // 2
-        face_area = w * h
-        
-        best_landmark_match = None
-        best_score = float('inf')  # Lower is better
-        
-        for landmark_set in landmarks_results.multi_face_landmarks:
-            # Get landmark bounding box
-            xs = [lm.x for lm in landmark_set.landmark]
-            ys = [lm.y for lm in landmark_set.landmark]
-            
-            # Convert to pixel coordinates (assuming frame dimensions)
-            frame_h, frame_w = 480, 640  # Standard resolution
-            landmark_xs = [x * frame_w for x in xs]
-            landmark_ys = [y * frame_h for y in ys]
-            
-            # Calculate landmark bounding box
-            lm_min_x, lm_max_x = min(landmark_xs), max(landmark_xs)
-            lm_min_y, lm_max_y = min(landmark_ys), max(landmark_ys)
-            lm_w = lm_max_x - lm_min_x
-            lm_h = lm_max_y - lm_min_y
-            lm_center_x = (lm_min_x + lm_max_x) / 2
-            lm_center_y = (lm_min_y + lm_max_y) / 2
-            lm_area = lm_w * lm_h
-            
-            # Multi-factor matching score
-            center_distance = ((face_center_x - lm_center_x) ** 2 + 
-                             (face_center_y - lm_center_y) ** 2) ** 0.5
-            
-            # Normalize by face size
-            normalized_distance = center_distance / max(w, h)
-            
-            # Size similarity factor (closer to 1.0 is better)
-            size_ratio = min(face_area, lm_area) / max(face_area, lm_area) if max(face_area, lm_area) > 0 else 0
-            
-            # Combined matching score (lower is better)
-            matching_score = normalized_distance + (1.0 - size_ratio)
-            
-            # Only consider if reasonable overlap
-            if normalized_distance < 1.0 and size_ratio > 0.3:  # Must have reasonable overlap and size
-                if matching_score < best_score:
-                    best_score = matching_score
-                    best_landmark_match = landmark_set
-        
-        return best_landmark_match
-    
-    def select_primary_face(self, faces, face_assignments):
-        """Select primary face for intensive processing using multiple criteria."""
-        if not faces:
-            return None
-        
-        current_time = time.time()
-        
-        # Update face areas tracking
-        for i, (x, y, w, h) in enumerate(faces):
-            face_id = face_assignments.get(i, -1)
-            if face_id >= 0:
-                area = w * h
-                self.face_areas[face_id] = area
-        
-        # If we have a current primary face that's still detected, keep it for stability
-        if (self.primary_face_id is not None and 
-            self.primary_face_id in [face_assignments.get(i, -1) for i in range(len(faces))]):
-            # Check if primary face is still reasonably large
-            current_primary_area = self.face_areas.get(self.primary_face_id, 0)
-            largest_area = max(self.face_areas.values()) if self.face_areas else 0
-            
-            # Keep primary if it's at least 70% of the largest face
-            if largest_area > 0 and current_primary_area / largest_area >= 0.7:
-                return self.primary_face_id
-        
-        # Select new primary face based on multiple criteria
-        face_scores = {}
-        frame_center_x, frame_center_y = 320, 240  # Assuming 640x480 frame
-        
-        for i, (x, y, w, h) in enumerate(faces):
-            face_id = face_assignments.get(i, -1)
-            if face_id < 0:
-                continue
-            
-            # Criteria for primary face selection
-            area = w * h
-            center_x, center_y = x + w//2, y + h//2
-            
-            # Distance from frame center (closer is better)
-            center_distance = ((center_x - frame_center_x) ** 2 + (center_y - frame_center_y) ** 2) ** 0.5
-            normalized_center_distance = center_distance / 400  # Normalize by max possible distance
-            
-            # Combined score (higher is better)
-            area_score = area / 10000  # Normalize area
-            centrality_score = 1.0 - min(normalized_center_distance, 1.0)
-            
-            # Weight: 70% area, 30% centrality (configurable)
-            total_score = (0.7 * area_score + 0.3 * centrality_score)
-            face_scores[face_id] = total_score
-        
-        # Select face with highest score
-        if face_scores:
-            new_primary_id = max(face_scores.items(), key=lambda x: x[1])[0]
-            self.primary_face_id = new_primary_id
-            return new_primary_id
-        
-        return None
-        
-    def setup_styles(self):
-        """Setup dark theme TTK styles with high contrast for professional xAI display"""
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        
-        # Dark theme color palette (GitHub Dark inspired)
-        # Background: #0d1117, Surface: #161b22, Primary: #58a6ff, Success: #3fb950
-        # Warning: #d29922, Danger: #f85149, Text: #c9d1d9
-        
-        # Configure custom styles for dark theme
-        self.style.configure('Title.TLabel', font=('Arial', 20, 'bold'), foreground='#58a6ff', background='#0d1117')
-        self.style.configure('Header.TLabel', font=('Arial', 13, 'bold'), foreground='#c9d1d9', background='#0d1117')
-        self.style.configure('Status.TLabel', font=('Arial', 11), foreground='#8b949e', background='#161b22')
-        self.style.configure('Error.TLabel', font=('Arial', 11, 'bold'), foreground='#f85149', background='#161b22')
-        self.style.configure('Info.TLabel', font=('Arial', 9), foreground='#8b949e', background='#161b22')
-        self.style.configure('Success.TLabel', font=('Arial', 11, 'bold'), foreground='#3fb950', background='#161b22')
-        self.style.configure('Warning.TLabel', font=('Arial', 11, 'bold'), foreground='#d29922', background='#161b22')
-        
-        # Dark theme button styles with high contrast
-        self.style.configure('Primary.TButton', 
-                           font=('Arial', 10, 'bold'),
-                           background='#58a6ff',
-                           foreground='#0d1117',
-                           borderwidth=1,
-                           relief='flat',
-                           padding=(20, 10))
-        self.style.map('Primary.TButton',
-                      background=[('active', '#79c0ff'), ('pressed', '#388bfd')])
-        
-        self.style.configure('Success.TButton', 
-                           font=('Arial', 10, 'bold'),
-                           background='#3fb950',
-                           foreground='#0d1117',
-                           borderwidth=1,
-                           relief='flat',
-                           padding=(20, 10))
-        self.style.map('Success.TButton',
-                      background=[('active', '#56d364'), ('pressed', '#2ea043')])
-        
-        self.style.configure('Warning.TButton', 
-                           font=('Arial', 10, 'bold'),
-                           background='#d29922',
-                           foreground='#0d1117',
-                           borderwidth=1,
-                           relief='flat',
-                           padding=(20, 10))
-        self.style.map('Warning.TButton',
-                      background=[('active', '#e2b340'), ('pressed', '#bb8009')])
-        
-        self.style.configure('Danger.TButton', 
-                           font=('Arial', 10, 'bold'),
-                           background='#f85149',
-                           foreground='#ffffff',
-                           borderwidth=1,
-                           relief='flat',
-                           padding=(20, 10))
-        self.style.map('Danger.TButton',
-                      background=[('active', '#ff7b72'), ('pressed', '#da3633')])
-        
-        # xAI button style for explanation features
-        self.style.configure('XAI.TButton', 
-                           font=('Arial', 10, 'bold'),
-                           background='#a371f7',
+
+            def _detect_faces_cb(_frame):
+                return detection_ctx
+
+            def _process_face_cb(current_frame, face_idx, bbox, ctx):
+                x, y, w, h = bbox
+                faces_local = ctx.get("all_faces", ctx.get("faces", []))
+                faces_to_process_local = ctx.get("faces", [])
+                face_assignments_local = ctx.get("face_assignments", {})
+
+                is_processing_face = face_idx < MAX_CONCURRENT_FACES
+                current_face_id = face_assignments_local.get(face_idx, -1)
+
+                if self.ENABLE_MULTI_FACE_VERIFICATION:
+                    is_primary_face = (current_face_id == self.primary_face_id)
+                    is_secondary_face = (not is_primary_face and current_face_id >= 0)
+                else:
+                    is_primary_face = (face_idx == 0)
+                    is_secondary_face = (face_idx > 0)
+
+                if is_primary_face:
+                    box_color = (0, 255, 0)
+                elif is_secondary_face:
+                    box_color = (255, 165, 0)
+                else:
+                    box_color = (0, 0, 255)
+
+                if self.registration_mode:
+                    if face_idx == 0:
+                        self.last_identity = "Registering..."
+                        box_color = (255, 165, 0)
+                elif is_primary_face and is_processing_face and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
+                    print(f"[VERIFICATION] Processing PRIMARY face {face_idx} at frame {self.frame_count}")
+                    process_start = time.time()
+
+                    crop_start = time.time()
+                    cropped_face = crop_face_with_padding(current_frame, x, y, w, h)
+                    crop_time = (time.time() - crop_start) * 1000
+
+                    if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
+                        resize_start = time.time()
+                        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+                        resize_time = (time.time() - resize_start) * 1000
+
+                        face_landmarks = None
+                        if is_primary_face:
+                            frame_rgb = cv2.cvtColor(current_frame, cv2.COLOR_BGR2RGB)
+                            landmarks_results = face_mesh_detector.process(frame_rgb)
+                            face_landmarks = self.match_landmarks_to_face((x, y, w, h), landmarks_results)
+
+                            if face_landmarks and self.frame_count % 30 == 0:
+                                print(f"[LANDMARKS] ✓ Matched landmarks to primary face {face_idx}")
+                            elif self.frame_count % 30 == 0:
+                                print(f"[LANDMARKS] ✗ No landmark match for primary face {face_idx}")
+
+                        if face_landmarks is None:
+                            rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                            landmarks_results = face_mesh_detector.process(rgb_face)
+                            if landmarks_results and landmarks_results.multi_face_landmarks:
+                                face_landmarks = landmarks_results.multi_face_landmarks[0]
+                                if self.frame_count % 30 == 0:
+                                    print(f"[LANDMARKS] ✓ Detected landmarks on cropped face {face_idx} (fallback)")
+                            elif self.frame_count % 30 == 0:
+                                print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
+
+                        early_identity = None
+                        if is_primary_face and cropped_face.size > 0:
+                            try:
+                                rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+                                pil_image = Image.fromarray(rgb).convert('RGB')
+                                image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+
+                                with torch.no_grad():
+                                    trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+
+                                min_distance = float('inf')
+                                best_match = None
+                                current_threshold = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
+
+                                for name, saved_data in employee_db.items():
+                                    if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
+                                        distances = [F.pairwise_distance(trial_embedding, emb).item() for emb in saved_data]
+                                        distance = min(distances) if distances else float('inf')
+                                    else:
+                                        saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
+                                        distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
+
+                                    if distance < min_distance:
+                                        min_distance = distance
+                                        best_match = name
+
+                                relaxed_threshold = current_threshold * 1.5
+                                if min_distance < relaxed_threshold and best_match:
+                                    confidence = max(0, min(100, (1 - min_distance / relaxed_threshold) * 100))
+                                    if confidence >= 30:
+                                        early_identity = best_match
+                                        if self.frame_count % 15 == 0:
+                                            print(f"[EARLY-ID] Detected {early_identity} (conf: {confidence:.0f}%, dist: {min_distance:.3f}) for spoof cache check")
+                            except Exception as e:
+                                if self.frame_count % 60 == 0:
+                                    print(f"[EARLY-ID] Error in early identity check: {e}")
+
+                        if (is_primary_face and self.emotion_analysis_enabled and 
+                            (self.frame_count % self.EMOTION_EVERY_N_FRAMES == 0)):
+                            try:
+                                emotion = 'Neutral'
+                                is_live = False
+                                liveness_confidence = 0.0
+                                liveness_details = {'error': 'No analysis performed'}
+
+                                cache_hit_identity = None
+                                if early_identity and early_identity in self.session_spoof_passed:
+                                    cache_hit_identity = early_identity
+                                else:
+                                    for cached_user in self.session_spoof_passed:
+                                        if cached_user in employee_db:
+                                            cache_hit_identity = cached_user
+                                            if self.frame_count % 30 == 0:
+                                                print(f"[SPOOF-CACHE] Fallback match: {cached_user} (early detection missed)")
+                                            break
+
+                                if cache_hit_identity:
+                                    print(f"[SPOOF-CACHE] {cache_hit_identity} found in spoof cache - skipping liveness check")
+                                    is_live = True
+                                    liveness_confidence = 0.95
+                                    emotion = 'Neutral'
+                                    liveness_details = {'method': 'cached_spoof_pass', 'cached_user': cache_hit_identity}
+                                    self.last_identity = cache_hit_identity
+                                else:
+                                    if self.lightweight_liveness:
+                                        if self.verification_start_time is None:
+                                            self.verification_start_time = time.time()
+
+                                        current_time = time.time()
+
+                                        if face_landmarks is not None:
+                                            try:
+                                                blink_detected, current_ear, total_blinks = self.blink_detector.detect_blink(face_landmarks)
+                                                has_blinked, blinks_needed = self.blink_detector.requires_blink(
+                                                    self.verification_start_time, current_time, min_blinks=1
+                                                )
+
+                                                if has_blinked:
+                                                    is_live = True
+                                                    liveness_confidence = 0.75
+                                                    liveness_details = {
+                                                        'method': 'blink_only',
+                                                        'blink_detected': blink_detected,
+                                                        'total_blinks': total_blinks,
+                                                        'current_ear': current_ear
+                                                    }
+                                                    emotion = 'Neutral'
+                                                else:
+                                                    is_live = None
+                                                    liveness_confidence = 0.5
+                                                    liveness_details = {
+                                                        'method': 'blink_only',
+                                                        'blink_detected': blink_detected,
+                                                        'total_blinks': total_blinks,
+                                                        'current_ear': current_ear
+                                                    }
+                                                    emotion = 'Neutral'
+                                            except Exception as e:
+                                                print(f"[LIGHT-LIVENESS] Blink detection error: {e}")
+                                                is_live = None
+                                                liveness_confidence = 0.0
+                                                liveness_details = {'error': str(e)}
+                                        else:
+                                            is_live = None
+                                            liveness_confidence = 0.0
+                                            liveness_details = {'error': 'No landmarks available for blink detection'}
+                                            emotion = 'Neutral'
+                                    else:
+                                        analysis = self.liveness_adapter.analyze(cropped_face_resized, face_landmarks)
+                                        is_live = analysis.get("is_live")
+                                        liveness_confidence = analysis.get("confidence", 0.0)
+                                        liveness_details = analysis.get("details", {})
+                                        emotion = liveness_details.get("emotion", "Neutral") if isinstance(liveness_details, dict) else "Neutral"
+
+                                with self.liveness_state_lock:
+                                    self.last_emotion = emotion
+                                    if is_live is True:
+                                        self.last_liveness = 'Real'
+                                    elif is_live is False:
+                                        self.last_liveness = 'Spoof'
+                                    else:
+                                        self.last_liveness = 'Waiting'
+
+                                    self.last_liveness_confidence = liveness_confidence
+
+                                    if isinstance(liveness_details, dict) and 'blink' in liveness_details:
+                                        blink_data = liveness_details['blink']
+                                        if isinstance(blink_data, dict) and 'current_ear' in blink_data:
+                                            current_ear = blink_data['current_ear']
+                                            with self.ear_lock:
+                                                self.ear_history.append(current_ear)
+                                                print(f"[EAR] Stored EAR={current_ear:.3f}, history size: {len(self.ear_history)}")
+
+                                            blink_count = blink_data.get('total_blinks', 0)
+                                            self.current_ear = current_ear
+                                            self.current_blinks = blink_count
+                                            self.window.after(0, self.update_ear_debug_display, current_ear, blink_count)
+
+                                print(f"[ANALYSIS] Emotion: {emotion}, Liveness: {self.last_liveness} ({liveness_confidence:.1%})")
+
+                            except Exception as e:
+                                print(f"[ANALYSIS ERROR] {e}")
+                                self.emotion_failure_count += 1
+                                if self.emotion_failure_count >= 5:
+                                    print(f"[ANALYSIS] Too many failures, disabling emotion analysis")
+                                    self.emotion_analysis_enabled = False
+                                    self.window.after(0, self.disable_blink_detection_ui)
+
+                                with self.liveness_state_lock:
+                                    self.last_emotion = "Neutral"
+                                    self.last_liveness = "Unknown"
+                                    self.last_liveness_confidence = 0.0
+
+                        current_time = time.time()
+
+                        with self.liveness_state_lock:
+                            if self.last_liveness == 'Spoof':
+                                self.consec_spoof_count += 1
+                                self.consec_real_count = 0
+                            elif self.last_liveness == 'Real':
+                                self.consec_real_count += 1
+                                self.consec_spoof_count = 0
+
+                            stable_liveness = self.last_liveness
+                            if self.consec_spoof_count >= self.CONSEC_REQUIRED:
+                                stable_liveness = 'Spoof'
+                            elif self.consec_real_count >= self.CONSEC_REQUIRED:
+                                stable_liveness = 'Real'
+
+                            if stable_liveness == 'Spoof':
+                                time_since_detection = current_time - self.last_spoof_detection_time
+                                if time_since_detection > (self.SPOOF_WARNING_DISPLAY_TIME * 3):
+                                    print("[SPOOF] Auto-recovery: clearing spoof state after extended timeout")
+                                    self.reset_spoof_detection()
+                                    stable_liveness = 'Unknown'
+
+                            is_live = (stable_liveness == 'Real')
+                            liveness_status = stable_liveness
+
+                        if hasattr(self, 'last_identity') and self.last_identity in self.session_spoof_passed:
+                            print(f"[SPOOF-CACHE] Safety check: {self.last_identity} is cached, forcing Real")
+                            is_live = True
+                            liveness_status = 'Real'
+                            stable_liveness = 'Real'
+
+                        if not is_live:
+                            self.last_identity = f"SPOOF - {liveness_status}"
+                            box_color = (0, 0, 255)
+                            with self.liveness_state_lock:
+                                if not self.spoof_warning_shown:
+                                    self.last_spoof_detection_time = current_time
+                                    self.spoof_warning_shown = True
+                        else:
+                            try:
+                                    verification_start = time.time()
+
+                                    verify_res = verify_face(
+                                        cropped_face_resized,
+                                        verification_model,
+                                        val_transform,
+                                        employee_db,
+                                        face_idx=face_idx,
+                                        frame_count=self.frame_count,
+                                        total_faces=len(faces_to_process_local),
+                                        is_primary_face=is_primary_face,
+                                    )
+
+                                    rgb = verify_res["rgb"]
+                                    image_tensor = verify_res["image_tensor"]
+                                    trial_embedding = verify_res["trial_embedding"]
+                                    best_match = verify_res["best_match"]
+                                    best_match_data = verify_res["best_match_data"]
+                                    min_distance = verify_res["min_distance"]
+                                    distance_results = verify_res["distance_results"]
+                                    current_threshold = verify_res["current_threshold"]
+                                    adjusted_threshold = verify_res["adjusted_threshold"]
+                                    confidence = verify_res["confidence"]
+                                    self.last_identity = "Not Registered"
+
+                                    verification_result = {
+                                        'face_idx': face_idx,
+                                        'best_match': best_match,
+                                        'distance': min_distance,
+                                        'confidence': confidence,
+                                        'threshold': adjusted_threshold,
+                                        'bbox': (x, y, w, h)
+                                    }
+                                    if not hasattr(self, 'current_frame_verifications'):
+                                        self.current_frame_verifications = []
+                                    self.current_frame_verifications.append(verification_result)
+
+                                    raw_identity = resolve_raw_identity(
+                                        face_idx=face_idx,
+                                        faces_to_process_count=len(faces_to_process_local),
+                                        best_match=best_match,
+                                        min_distance=min_distance,
+                                        adjusted_threshold=adjusted_threshold,
+                                        confidence=confidence,
+                                        confidence_rejection_threshold=CONFIDENCE_REJECTION_THRESHOLD,
+                                        current_frame_verifications=self.current_frame_verifications,
+                                    )
+                                    if raw_identity == "Not Registered (Low Confidence)" and face_idx == 0:
+                                        print(f"Rejected: Low confidence ({confidence:.0f}%)")
+
+                                    if current_face_id >= 0:
+                                        self.update_face_recognition(current_face_id, raw_identity, confidence)
+                                        face_history = self.get_face_recognition_history(current_face_id)
+                                    else:
+                                        face_history = []
+
+                                    frame_identity = smooth_identity(
+                                        raw_identity=raw_identity,
+                                        confidence=confidence,
+                                        face_history=face_history,
+                                        recognition_history=self.recognition_history,
+                                        smoothing_window=self.SMOOTHING_WINDOW,
+                                        is_primary_face=is_primary_face,
+                                    )
+                                    if frame_identity != raw_identity:
+                                        print(f"[TRACKING] Face {current_face_id}: Using tracked identity '{frame_identity}'")
+
+                                    current_time = time.time()
+
+                                    def _reset_spoof(reason: str):
+                                        self.reset_spoof_detection(reason)
+
+                                    def _mark_attendance_async(name: str, avg_confidence: float):
+                                        def mark_async():
+                                            try:
+                                                success, message = self.attendance_logger.mark_attendance(
+                                                    name, min_distance, self.last_emotion, self.last_liveness
+                                                )
+                                                if success:
+                                                    print(f"✓ {message}")
+                                            except Exception as e:
+                                                print(f"Attendance marking error: {e}")
+                                        threading.Thread(target=mark_async, daemon=True).start()
+                                        self.last_attendance_message = f"Checked in: {name}"
+
+                                    def _log_checkin(name: str):
+                                        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                                        log_entry = f"[{timestamp}] {name}"
+                                        self.log_listbox.insert(0, log_entry)
+                                        print(f"✓ Added to check-in log: {log_entry}")
+
+                                    lock_state = {
+                                        "locked_identity": self.locked_identity,
+                                        "lock_timestamp": self.lock_timestamp,
+                                        "identity_lock_buffer": self.identity_lock_buffer,
+                                        "last_identity": self.last_identity,
+                                    }
+
+                                    frame_identity, box_color, last_identity_val = update_identity_lock(
+                                        is_primary_face=is_primary_face,
+                                        raw_identity=raw_identity,
+                                        confidence=confidence,
+                                        current_time=current_time,
+                                        lock_state=lock_state,
+                                        lock_duration=self.LOCK_DURATION,
+                                        lock_display_time=self.LOCK_DISPLAY_TIME,
+                                        lock_min_verifications=self.LOCK_MIN_VERIFICATIONS,
+                                        last_liveness=self.last_liveness,
+                                        on_reset_spoof=_reset_spoof,
+                                        on_mark_attendance=_mark_attendance_async,
+                                        on_log_checkin=_log_checkin,
+                                    )
+
+                                    self.locked_identity = lock_state.get("locked_identity")
+                                    self.lock_timestamp = lock_state.get("lock_timestamp", 0)
+                                    self.identity_lock_buffer = lock_state.get("identity_lock_buffer", [])
+                                    self.last_identity = last_identity_val
+
+                                    if face_idx == 0:
+                                        self.last_confidence = confidence
+                                        self.last_distance = min_distance
+                                        self.last_identity = frame_identity
+
+                                        if (self.last_identity in employee_db and 
+                                            self.last_identity not in self.session_spoof_passed and 
+                                            self.last_liveness == 'Real'):
+                                            self.session_spoof_passed.add(self.last_identity)
+                                            print(f"[SPOOF-CACHE] Added {self.last_identity} to spoof cache")
+
+                                    update_face_lists(
+                                        face_idx=face_idx,
+                                        frame_identity=frame_identity,
+                                        confidence=confidence,
+                                        is_primary_face=is_primary_face,
+                                        last_emotion=self.last_emotion,
+                                        last_liveness=self.last_liveness,
+                                        face_identities=self.face_identities,
+                                        face_confidences=self.face_confidences,
+                                        face_emotions=self.face_emotions,
+                                        face_liveness=self.face_liveness,
+                                        enable_multi_face_verification=self.ENABLE_MULTI_FACE_VERIFICATION,
+                                        current_face_id=current_face_id,
+                                        face_verification_history=self.face_verification_history,
+                                        face_identities_verified=self.face_identities_verified,
+                                        face_confidences_verified=self.face_confidences_verified,
+                                        current_time=current_time,
+                                    )
+
+                                    xai_start = time.time()
+                                    self.current_face_tensor = image_tensor
+                                    self.current_face_image = rgb
+
+                                    if self.explainer is not None:
+                                        try:
+                                            threshold = adjusted_threshold
+                                            self.current_explanation = self.explainer.explain_distance(
+                                                min_distance, threshold
+                                            )
+                                            quality_exp = self.explainer.explain_quality_factors(rgb)
+                                            self.current_explanation['quality_message'] = quality_exp['overall_message']
+                                        except Exception as e:
+                                            print(f"[WARNING] Explanation generation failed: {e}")
+                                    xai_time = (time.time() - xai_start) * 1000
+                                    if xai_time > 5:
+                                        print(f"    [TIMING] xAI Explanation: {xai_time:.2f}ms")
+
+                                    self.knn_neighbors = (
+                                        [best_match] * 5,
+                                        [min_distance] * 5
+                                    )
+
+                                    if best_match_data and USE_MULTI_EMBEDDING and isinstance(best_match_data, list):
+                                        trial_device = trial_embedding.device
+                                        distances_with_idx = []
+                                        for idx, emb in enumerate(best_match_data):
+                                            emb_on_device = emb.to(trial_device, non_blocking=True)
+                                            distances_with_idx.append((F.pairwise_distance(trial_embedding, emb_on_device).item(), idx))
+                                        _, self.matched_pose_index = min(distances_with_idx, key=lambda x: x[0])
+                                    else:
+                                        self.matched_pose_index = 0
+
+                                    total_process_time = (time.time() - process_start) * 1000
+                                    if total_process_time > 100:
+                                        print(f"  Processing time: {total_process_time:.0f}ms")
+                            except Exception as e:
+                                print(f"Verification error: {e}")
+                                self.last_identity = "Error"
+                    else:
+                        self.last_identity = "Face too small"
+                        box_color = (0, 0, 255)
+
+                elif is_secondary_face and is_processing_face and self.frame_count % (self.PROCESS_EVERY_N_FRAMES * 2) == 0:
+                    print(f"[SECONDARY] Processing secondary face {face_idx} (detection only - no identity to prevent flickering)")
+                    cropped_face = crop_face_with_padding(current_frame, x, y, w, h)
+                    if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
+                        while len(self.face_identities) <= face_idx:
+                            self.face_identities.append("Processing...")
+                        self.face_identities[face_idx] = "Detected"
+                        while len(self.face_confidences) <= face_idx:
+                            self.face_confidences.append(0)
+                        self.face_confidences[face_idx] = 0
+                    else:
+                        while len(self.face_identities) <= face_idx:
+                            self.face_identities.append("Processing...")
+                        self.face_identities[face_idx] = "Too Small"
+                        while len(self.face_confidences) <= face_idx:
+                            self.face_confidences.append(0)
+                        self.face_confidences[face_idx] = 0
+
+                if face_idx < MAX_CONCURRENT_FACES:
+                    if self.registration_mode and face_idx == 0:
+                        display_text = "Registering..."
+                    elif is_primary_face:
+                        with self.liveness_state_lock:
+                            display_text = f"PRIMARY: {self.last_identity} ({self.last_emotion} | {self.last_liveness})"
+                    elif is_secondary_face:
+                        if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
+                            face_identity = self.face_identities[face_idx]
+                            face_confidence = self.face_confidences[face_idx] if face_idx < len(self.face_confidences) else 0
+                            display_text = f"Others: {face_identity} ({face_confidence:.0f}%)"
+                        else:
+                            display_text = f"Others: Processing..."
+                    else:
+                        if hasattr(self, 'face_identities') and face_idx < len(self.face_identities):
+                            display_text = f"UNTRACKED: {self.face_identities[face_idx]}"
+                        else:
+                            display_text = f"Face {face_idx+1}: Processing..."
+                else:
+                    display_text = "Face Limit Exceeded"
+
+                if face_idx < MAX_CONCURRENT_FACES:
+                    if face_idx == 0 and hasattr(self, 'box_color_transition'):
+                        trans = self.box_color_transition
+                        trans['target_color'] = box_color
+
+                        if trans['current_color'] != trans['target_color']:
+                            trans['frame'] += 1
+                            if trans['frame'] >= trans['transition_frames']:
+                                trans['current_color'] = trans['target_color']
+                                trans['frame'] = 0
+                            else:
+                                factor = trans['frame'] / trans['transition_frames']
+                                trans['current_color'] = interpolate_color(
+                                    trans['current_color'], trans['target_color'], factor
+                                )
+                        box_color = trans['current_color']
+                    elif face_idx > 0:
+                        face_colors = [(0, 255, 0), (255, 0, 255), (0, 255, 255), (255, 255, 0)]
+                        box_color = face_colors[face_idx % len(face_colors)]
+                else:
+                    box_color = (128, 128, 128)
+
+                current_identity = self.face_identities[face_idx] if face_idx < len(self.face_identities) else "Processing..."
+                is_recognized = current_identity not in ["Not Registered", "Not Registered (Low Confidence)", "Error", "Spoof Detected", "Face too small", "Registering...", "Processing..."]
+                thickness = 3 if is_recognized else 2
+                draw_rounded_rectangle(current_frame, (x, y), (x+w, y+h), box_color, thickness, radius=12)
+
+                font = cv2.FONT_HERSHEY_DUPLEX
+                (text_w, text_h), baseline = cv2.getTextSize(display_text, font, 0.6, 2)
+                label_y = max(y - text_h - 18, 10)
+
+                label_overlay = current_frame.copy()
+                draw_rounded_rectangle(label_overlay, (x - 2, label_y), (x + text_w + 24, label_y + text_h + 12), 
+                                     (20, 20, 30), -1, radius=8)
+                cv2.addWeighted(label_overlay, 0.85, current_frame, 0.15, 0, current_frame)
+
+                cv2.putText(current_frame, display_text, (x + 10, label_y + text_h + 6), 
+                           font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+                if face_idx < MAX_CONCURRENT_FACES and self.frame_count % self.PROCESS_EVERY_N_FRAMES == 0:
+                    self.recognition_stats['total_detections'] += 1
+                    current_identity = self.face_identities[face_idx] if face_idx < len(self.face_identities) else "Processing..."
+                    if current_identity not in ["Not Registered", "Not Registered (Low Confidence)", "Error", "Spoof Detected", "Face too small", "Processing..."]:
+                        self.recognition_stats['successful_recognitions'] += 1
+                        self.recognition_stats['unique_faces_today'].add(current_identity)
+
+                return {
+                    "face_idx": face_idx,
+                    "bbox": bbox,
+                    "box_color": box_color,
+                }
+
+            def _update_ui_cb(current_frame, results, ctx):
+                faces_local = ctx.get("all_faces", ctx.get("faces", []))
+
+                if not self.registration_mode:
+                    h, w = current_frame.shape[:2]
+                    font_status = cv2.FONT_HERSHEY_DUPLEX
+
+                    if len(self.confidence_buffer) > 0:
+                        buffer_size = len(self.confidence_buffer)
+                        progress_pct = min(100, int((buffer_size / 20) * 100))
+                        status_text = f"Analyzing: {progress_pct}%"
+                        status_color = (255, 193, 7)
+
+                        (tw, th), _ = cv2.getTextSize(status_text, font_status, 0.5, 1)
+
+                        x_pos = w - tw - 40
+                        y_pos = 10
+
+                        overlay = current_frame.copy()
+                        draw_rounded_rectangle(overlay, (x_pos - 10, y_pos), 
+                                             (x_pos + tw + 20, y_pos + th + 16), 
+                                             status_color, -1, radius=10)
+                        cv2.addWeighted(overlay, 0.85, current_frame, 0.15, 0, current_frame)
+                        cv2.putText(current_frame, status_text, (x_pos + 5, y_pos + th + 5), 
+                                   font_status, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+                        bar_x = x_pos - 10
+                        bar_y = y_pos + th + 20
+                        bar_w = tw + 30
+                        bar_h = 6
+
+                        cv2.rectangle(current_frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), 
+                                     (60, 60, 80), -1)
+                        progress_w = int(bar_w * (progress_pct / 100))
+                        cv2.rectangle(current_frame, (bar_x, bar_y), (bar_x + progress_w, bar_y + bar_h), 
+                                     status_color, -1)
+
+                if len(faces_local) > MAX_CONCURRENT_FACES:
+                    warning_text = f"⚠ {len(faces_local)} faces detected - processing {MAX_CONCURRENT_FACES} max"
+                    font_warn = cv2.FONT_HERSHEY_DUPLEX
+                    (tw, th), _ = cv2.getTextSize(warning_text, font_warn, 0.6, 1)
+                    overlay = current_frame.copy()
+                    draw_rounded_rectangle(overlay, (5, 5), (tw + 30, th + 22), (255, 165, 0), -1, radius=10)
+                    cv2.addWeighted(overlay, 0.88, current_frame, 0.12, 0, current_frame)
+                    cv2.putText(current_frame, warning_text, (18, th + 14), 
+                               font_warn, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+                elif len(faces_local) > 1:
+                    if self.ENABLE_MULTI_FACE_VERIFICATION:
+                        primary_count = 1 if self.primary_face_id is not None else 0
+                        secondary_count = len([fid for fid in self.face_identities_verified.keys() 
+                                             if fid != self.primary_face_id])
+                        verified_people = list(self.face_identities_verified.values())
+                        recognized_count = len([p for p in verified_people if "Not Registered" not in p])
+                        info_text = f"✓ {len(faces_local)} faces: 1 PRIMARY + {secondary_count} SEC | {recognized_count} recognized"
+                    else:
+                        info_text = f"✓ Processing {len(faces_local)} faces simultaneously"
+
+                    font_info = cv2.FONT_HERSHEY_DUPLEX
+                    (tw, th), _ = cv2.getTextSize(info_text, font_info, 0.5, 1)
+                    overlay = current_frame.copy()
+                    draw_rounded_rectangle(overlay, (5, 5), (tw + 25, th + 18), (0, 255, 0), -1, radius=8)
+                    cv2.addWeighted(overlay, 0.85, current_frame, 0.15, 0, current_frame)
+                    cv2.putText(current_frame, info_text, (15, th + 12), 
+                               font_info, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+                if hasattr(self, 'process_start'):
+                    process_time = (time.time() - self.process_start) * 1000
+                    self.performance_monitor.log_timing('total', process_time)
+
+                try:
+                    self.frame_queue.put_nowait(current_frame)
+                    if self.frame_count % 300 == 0:
+                        print(f"[DEBUG] Frame {self.frame_count} queued successfully")
+                except queue.Full:
+                    if self.frame_count % 30 == 0:
+                        print(f"[WARNING] Frame queue full! Skipping frame {self.frame_count} to prevent lag.")
+
+            process_frame_shell(
+                frame,
+                detect_faces_cb=_detect_faces_cb,
+                process_face_cb=_process_face_cb,
+                update_ui_cb=_update_ui_cb,
+            )
                            foreground='#ffffff',
                            borderwidth=1,
                            relief='flat',

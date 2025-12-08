@@ -10,8 +10,16 @@ import mediapipe as mp
 import sys
 import os
 import time
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Ensure project root and src are on sys.path
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+for path in (ROOT, SRC):
+    str_path = str(path)
+    if str_path not in sys.path:
+        sys.path.insert(0, str_path)
+
 from blink_detector import BlinkDetector
 
 # Initialize - USE ONLY BLINK DETECTOR (no full liveness analysis)

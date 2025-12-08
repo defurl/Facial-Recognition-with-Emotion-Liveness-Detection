@@ -277,11 +277,33 @@ def update_face_lists(
 
 
 def process_frame_shell(frame, *, detect_faces_cb, process_face_cb, update_ui_cb):
-    """Scaffold for future per-frame orchestration.
+    """Orchestrate a single frame through detection, per-face processing, and UI update.
 
-    Not yet wired. Intended flow:
-    faces = detect_faces_cb(frame)
-    results = [process_face_cb(frame, face) for face in faces]
-    update_ui_cb(results)
+    The callbacks provide flexibility for UI/state management while keeping orchestration
+    predictable. The detection callback can return either a list of face bboxes or a
+    context dict containing ``faces`` plus any extra metadata. The processing callback
+    receives the frame, the face index, the bbox, and the detection context. The UI
+    callback receives the frame, the list of per-face results, and the detection context.
     """
-    raise NotImplementedError("process_frame_shell is a scaffold and not yet wired")
+
+    detection_ctx = detect_faces_cb(frame)
+
+    # Normalize detection output to a context dict with a faces list
+    if isinstance(detection_ctx, dict):
+        faces = detection_ctx.get("faces", [])
+        context = detection_ctx
+        context.setdefault("faces", faces)
+    else:
+        faces = detection_ctx or []
+        context = {"faces": faces}
+
+    results = []
+    for face_idx, bbox in enumerate(context["faces"]):
+        try:
+            result = process_face_cb(frame, face_idx, bbox, context)
+        except Exception as exc:  # Keep the pipeline resilient to per-face errors
+            result = {"error": exc, "face_idx": face_idx, "bbox": bbox}
+        results.append(result)
+
+    update_ui_cb(frame, results, context)
+    return results
