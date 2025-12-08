@@ -97,3 +97,36 @@ def verify_face(
         "embedding_ms": embedding_time,
         "comparison_ms": comparison_time,
     }
+
+
+def resolve_raw_identity(
+    *,
+    face_idx: int,
+    faces_to_process_count: int,
+    best_match: str,
+    min_distance: float,
+    adjusted_threshold: float,
+    confidence: float,
+    confidence_rejection_threshold: float,
+    current_frame_verifications: list,
+):
+    """Determine raw identity with rejection and conflict checks."""
+    if confidence < confidence_rejection_threshold * 100:
+        return "Not Registered (Low Confidence)"
+
+    if min_distance < adjusted_threshold:
+        margin_to_threshold = adjusted_threshold - min_distance
+        margin_ratio = margin_to_threshold / adjusted_threshold if adjusted_threshold else 0.0
+
+        if faces_to_process_count > 1 and current_frame_verifications:
+            for other in current_frame_verifications:
+                if (
+                    other.get("best_match") == best_match
+                    and other.get("face_idx") != face_idx
+                    and other.get("confidence", 0) > confidence + 10
+                ):
+                    return "Ambiguous Match"
+
+        return best_match
+
+    return "Not Registered"

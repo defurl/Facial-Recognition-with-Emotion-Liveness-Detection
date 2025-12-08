@@ -55,7 +55,7 @@ from src.config import (
 from src.models import FaceEmbeddingCNN
 from src.data_loader import get_transforms
 from src.utils import detect_faces, crop_face_with_padding, face_mesh_detector
-from src.emotion import analyze_emotion_and_liveness, reset_liveness_detector
+from src.emotion import reset_liveness_detector
 from src.blink_detector import BlinkDetector
 from src.attendance import AttendanceLogger
 from src.explainability import ExplainabilityEngine
@@ -64,7 +64,7 @@ from src.runtime.models_loader import load_verification_model
 from src.runtime.db import load_employee_db, build_embedding_index
 from src.runtime.settings import load_gui_threshold, save_gui_threshold
 from src.pipeline.verification import verify_embedding_fast, set_embedding_index
-from src.pipeline.processing import verify_face
+from src.pipeline.processing import verify_face, resolve_raw_identity
 from src.pipeline.liveness_adapter import LivenessAdapter
 
 # Import performance optimized classes with fallback
@@ -2542,48 +2542,22 @@ class AttendanceSystemGUI:
                                         'threshold': adjusted_threshold,
                                         'bbox': (x, y, w, h)
                                     }
-                                    
-                                    # Store in frame-level results for conflict resolution
                                     if not hasattr(self, 'current_frame_verifications'):
                                         self.current_frame_verifications = []
                                     self.current_frame_verifications.append(verification_result)
-                                    
-                                    # ENHANCED MULTI-PERSON IDENTITY DETERMINATION
-                                    if confidence < CONFIDENCE_REJECTION_THRESHOLD * 100:
-                                        raw_identity = "Not Registered (Low Confidence)"
-                                        if face_idx == 0:
-                                            print(f"Rejected: Low confidence ({confidence:.0f}%)")
-                                    elif min_distance < adjusted_threshold:
-                                        # IDENTITY ASSIGNMENT VALIDATION
-                                        margin_to_threshold = adjusted_threshold - min_distance
-                                        margin_ratio = margin_to_threshold / adjusted_threshold
-                                        
-                                        # WARNING: If margin is very small, this might be a false positive
-                                        if margin_ratio < 0.1 and face_idx == 0:  # Less than 10% margin
-                                            print(f"[IDENTITY-WARNING] Narrow margin for {best_match}: distance={min_distance:.4f}, threshold={adjusted_threshold:.4f}, margin={margin_to_threshold:.4f} ({margin_ratio:.1%})")
-                                            print(f"[IDENTITY-WARNING] This could be a false positive - consider stricter threshold")
-                                        
-                                        # CONFLICT RESOLUTION: Check if another face has better match for same person
-                                        if len(faces_to_process) > 1 and hasattr(self, 'current_frame_verifications'):
-                                            # Find if any other face has better confidence for this person
-                                            better_match_exists = False
-                                            for other_result in self.current_frame_verifications:
-                                                if (other_result['best_match'] == best_match and 
-                                                    other_result['face_idx'] != face_idx and
-                                                    other_result['confidence'] > confidence + 10):  # 10% better threshold
-                                                    better_match_exists = True
-                                                    break
-                                            
-                                            if better_match_exists:
-                                                raw_identity = "Ambiguous Match"
-                                                if face_idx == 0:
-                                                    print(f"Conflict: Another face has better match for {best_match}")
-                                            else:
-                                                raw_identity = best_match
-                                        else:
-                                            raw_identity = best_match
-                                    else:
-                                        raw_identity = "Not Registered"
+
+                                    raw_identity = resolve_raw_identity(
+                                        face_idx=face_idx,
+                                        faces_to_process_count=len(faces_to_process),
+                                        best_match=best_match,
+                                        min_distance=min_distance,
+                                        adjusted_threshold=adjusted_threshold,
+                                        confidence=confidence,
+                                        confidence_rejection_threshold=CONFIDENCE_REJECTION_THRESHOLD,
+                                        current_frame_verifications=self.current_frame_verifications,
+                                    )
+                                    if raw_identity == "Not Registered (Low Confidence)" and face_idx == 0:
+                                        print(f"Rejected: Low confidence ({confidence:.0f}%)")
                                     
                                     # Update face-specific recognition tracking
                                     if current_face_id >= 0:
