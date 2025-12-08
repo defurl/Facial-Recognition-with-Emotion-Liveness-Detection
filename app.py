@@ -65,6 +65,7 @@ from src.runtime.db import load_employee_db, build_embedding_index
 from src.runtime.settings import load_gui_threshold, save_gui_threshold
 from src.pipeline.verification import verify_embedding_fast, set_embedding_index
 from src.pipeline.processing import verify_face
+from src.pipeline.liveness_adapter import LivenessAdapter
 
 # Import performance optimized classes with fallback
 try:
@@ -496,6 +497,7 @@ class AttendanceSystemGUI:
         
         # Initialize lightweight blink detector and liveness system
         self.blink_detector = BlinkDetector()
+        self.liveness_adapter = LivenessAdapter(use_blink_only=True)
         self.verification_start_time = None
         self.lightweight_liveness = True  # Default to lightweight mode
         
@@ -2406,10 +2408,11 @@ class AttendanceSystemGUI:
                                     else:
                                         # ORIGINAL: Heavy emotion+liveness analysis (fallback)
                                         
-                                        from src.emotion import analyze_emotion_and_liveness
-                                        emotion, is_live, liveness_confidence, liveness_details = analyze_emotion_and_liveness(
-                                            cropped_face_resized, face_landmarks
-                                        )
+                                        analysis = self.liveness_adapter.analyze(cropped_face_resized, face_landmarks)
+                                        is_live = analysis.get("is_live")
+                                        liveness_confidence = analysis.get("confidence", 0.0)
+                                        liveness_details = analysis.get("details", {})
+                                        emotion = liveness_details.get("emotion", "Neutral") if isinstance(liveness_details, dict) else "Neutral"
                                 
                                 # Thread-safe update of liveness state
                                 with self.liveness_state_lock:
