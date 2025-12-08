@@ -73,6 +73,7 @@ from src.pipeline.face_processor import (
     interpolate_color,
     role_box_color,
 )
+from src.ui.overlays import draw_banner, draw_ear_graph, draw_registration_overlay, draw_status_chip
 
 # Import performance optimized classes with fallback
 try:
@@ -239,74 +240,6 @@ def select_primary_face(faces, frame_width, frame_height, previous_primary_idx=-
         print(f"Error selecting primary face: {e}")
         return -1 if not faces else 0
 
-
-def draw_ear_graph(frame, ear_history, ear_threshold=0.5):
-    """Draw EAR (Eye Aspect Ratio) graph overlay for blink detection debugging"""
-    if len(ear_history) < 1:
-        return
-    
-    # Draw background even with minimal data
-    if len(ear_history) < 2:
-        # Just draw the graph background with "Collecting data..." message
-        h, w = frame.shape[:2]
-        graph_x = 10
-        graph_y = h - 130
-        graph_w = 300
-        graph_h = 120
-        cv2.rectangle(frame, (graph_x, graph_y), 
-                     (graph_x + graph_w, graph_y + graph_h), 
-                     (20, 20, 20), -1)
-        cv2.rectangle(frame, (graph_x, graph_y), 
-                     (graph_x + graph_w, graph_y + graph_h), 
-                     (100, 100, 100), 2)
-        cv2.putText(frame, "EAR Graph - Collecting data...", (graph_x + 5, graph_y + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        return
-    
-    h, w = frame.shape[:2]
-    
-    # Graph dimensions (positioned at bottom-left corner)
-    graph_x = 10
-    graph_y = h - 130
-    graph_w = 300
-    graph_h = 120
-    
-    # Background
-    cv2.rectangle(frame, (graph_x, graph_y), 
-                 (graph_x + graph_w, graph_y + graph_h), 
-                 (20, 20, 20), -1)
-    cv2.rectangle(frame, (graph_x, graph_y), 
-                 (graph_x + graph_w, graph_y + graph_h), 
-                 (100, 100, 100), 2)
-    
-    # Threshold line
-    threshold_y = int(graph_y + graph_h - (ear_threshold / 0.8 * graph_h))  # Scale: 0-0.8
-    cv2.line(frame, (graph_x, threshold_y), 
-            (graph_x + graph_w, threshold_y), 
-            (0, 255, 255), 2)
-    cv2.putText(frame, f"Threshold: {ear_threshold:.2f}", (graph_x + 5, threshold_y - 5), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
-    
-    # Plot EAR values
-    for i in range(1, len(ear_history)):
-        x1 = graph_x + int((i - 1) * graph_w / 150)
-        x2 = graph_x + int(i * graph_w / 150)
-        
-        # Scale EAR to graph (0-0.8 range)
-        y1 = graph_y + graph_h - int(min(ear_history[i-1], 0.8) / 0.8 * graph_h)
-        y2 = graph_y + graph_h - int(min(ear_history[i], 0.8) / 0.8 * graph_h)
-        
-        # Color: green=open, red=closed
-        line_color = (0, 255, 0) if ear_history[i] > ear_threshold else (0, 0, 255)
-        cv2.line(frame, (x1, y1), (x2, y2), line_color, 2)
-    
-    # Labels
-    current_ear = ear_history[-1] if ear_history else 0.0
-    ear_color = (0, 255, 0) if current_ear > ear_threshold else (0, 0, 255)
-    cv2.putText(frame, "EAR Over Time", (graph_x + 5, graph_y + 15), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    cv2.putText(frame, f"Current: {current_ear:.3f}", (graph_x + 5, graph_y + 30), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, ear_color, 1)
 
 
 class AttendanceSystemGUI:
@@ -1965,55 +1898,14 @@ class AttendanceSystemGUI:
                 # Clean, centered registration overlay above camera feed
                 h, w = frame.shape[:2]
                 instruction_text = state['instructions'][current_step]
-                
-                # Use sharp, modern font (FONT_HERSHEY_DUPLEX for sharper text)
-                font = cv2.FONT_HERSHEY_DUPLEX
-                
-                # Calculate text size for instruction
-                (inst_w, inst_h), _ = cv2.getTextSize(instruction_text, font, 0.9, 2)
-                
-                # Center-top position with more breathing room
-                card_w = min(w - 100, 500)
-                card_h = 80
-                x_offset = (w - card_w) // 2
-                y_offset = 20
-                
-                # Draw modern card with high contrast
-                overlay = frame.copy()
-                draw_rounded_rectangle(overlay, (x_offset, y_offset), 
-                                     (x_offset + card_w, y_offset + card_h), 
-                                     (26, 26, 46), -1, radius=12)  # Dark background #1a1a2e
-                cv2.addWeighted(overlay, 0.95, frame, 0.05, 0, frame)
-                
-                # Circular progress indicator on left side
-                progress = current_step / len(state['poses_required'])
-                circle_x = x_offset + 50
-                circle_y = y_offset + card_h // 2
-                radius = 28
-                
-                # Progress circle background
-                cv2.circle(frame, (circle_x, circle_y), radius, (60, 60, 80), -1)
-                # Progress arc
-                angle = int(360 * progress)
-                cv2.ellipse(frame, (circle_x, circle_y), (radius - 3, radius - 3), 
-                           -90, 0, angle, (46, 204, 113), 4)  # #2ecc71 green
-                # Progress number with high contrast
-                progress_text = f"{current_step + 1}/{len(state['poses_required'])}"
-                (prog_w, prog_h), _ = cv2.getTextSize(progress_text, font, 0.6, 1)
-                cv2.putText(frame, progress_text, 
-                           (circle_x - prog_w//2, circle_y + prog_h//2), 
-                           font, 0.6, (255, 255, 255), 1)
-                
-                # Instruction text - centered with high contrast white (lighter weight)
-                text_x = x_offset + 100
-                text_y = y_offset + (card_h + inst_h) // 2
-                cv2.putText(frame, instruction_text, (text_x, text_y), 
-                           font, 0.85, (255, 255, 255), 1, cv2.LINE_AA)
-                
-                # Simple feedback text at bottom - minimal processing
-                if hasattr(self, 'registration_feedback') and self.registration_feedback:
-                    cv2.putText(frame, self.registration_feedback, (20, h - 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, self.registration_feedback_color, 2, cv2.LINE_AA)
+                frame = draw_registration_overlay(
+                    frame,
+                    instruction_text=instruction_text,
+                    current_step=current_step,
+                    total_steps=len(state['poses_required']),
+                    feedback_text=getattr(self, "registration_feedback", ""),
+                    feedback_color=getattr(self, "registration_feedback_color", (255, 165, 0)),
+                )
                 
                 # Check every 30 frames (~1 second at 30fps) to reduce processing load and flickering
                 if self.frame_count - state['last_check_frame'] >= 30:
@@ -2183,54 +2075,17 @@ class AttendanceSystemGUI:
             
             # Display state accumulation/lock status indicator
             if not self.registration_mode:
-                h, w = frame.shape[:2]
-                font_status = cv2.FONT_HERSHEY_DUPLEX
-                
                 if len(self.confidence_buffer) > 0:
-                    # Show accumulation progress
                     buffer_size = len(self.confidence_buffer)
                     progress_pct = min(100, int((buffer_size / 20) * 100))
                     status_text = f"Analyzing: {progress_pct}%"
                     status_color = (255, 193, 7)  # Amber
-                    
-                    (tw, th), _ = cv2.getTextSize(status_text, font_status, 0.5, 1)
-                    
-                    # Draw indicator in top-right corner
-                    x_pos = w - tw - 40
-                    y_pos = 10
-                    
-                    overlay = frame.copy()
-                    draw_rounded_rectangle(overlay, (x_pos - 10, y_pos), 
-                                         (x_pos + tw + 20, y_pos + th + 16), 
-                                         status_color, -1, radius=10)
-                    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
-                    cv2.putText(frame, status_text, (x_pos + 5, y_pos + th + 5), 
-                               font_status, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                    
-                    # Draw progress bar below text
-                    bar_x = x_pos - 10
-                    bar_y = y_pos + th + 20
-                    bar_w = tw + 30
-                    bar_h = 6
-                    
-                    # Background bar
-                    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), 
-                                 (60, 60, 80), -1)
-                    # Progress bar
-                    progress_w = int(bar_w * (progress_pct / 100))
-                    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + progress_w, bar_y + bar_h), 
-                                 status_color, -1)
+                    frame = draw_status_chip(frame, status_text, status_color, progress_pct=progress_pct)
             
             # Display warning banner if face limit exceeded
             if len(faces) > MAX_CONCURRENT_FACES:
                 warning_text = f"⚠ {len(faces)} faces detected - processing {MAX_CONCURRENT_FACES} max"
-                font_warn = cv2.FONT_HERSHEY_DUPLEX
-                (tw, th), _ = cv2.getTextSize(warning_text, font_warn, 0.6, 1)
-                overlay = frame.copy()
-                draw_rounded_rectangle(overlay, (5, 5), (tw + 30, th + 22), (255, 165, 0), -1, radius=10)
-                cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
-                cv2.putText(frame, warning_text, (18, th + 14), 
-                           font_warn, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+                frame = draw_banner(frame, warning_text, (255, 165, 0), alpha=0.88, radius=10)
             elif len(faces) > 1:
                 # ENHANCED: Show multi-person verification with primary/secondary breakdown
                 if self.ENABLE_MULTI_FACE_VERIFICATION:
@@ -2243,14 +2098,8 @@ class AttendanceSystemGUI:
                 else:
                     # Fallback to original multi-face display
                     info_text = f"✓ Processing {len(faces)} faces simultaneously"
-                    
-                font_info = cv2.FONT_HERSHEY_DUPLEX
-                (tw, th), _ = cv2.getTextSize(info_text, font_info, 0.5, 1)
-                overlay = frame.copy()
-                draw_rounded_rectangle(overlay, (5, 5), (tw + 25, th + 18), (0, 255, 0), -1, radius=8)
-                cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
-                cv2.putText(frame, info_text, (15, th + 12), 
-                           font_info, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                
+                frame = draw_banner(frame, info_text, (0, 255, 0), alpha=0.85, radius=8)
 
             # Log performance metrics
             if hasattr(self, 'process_start'):
