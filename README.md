@@ -135,12 +135,22 @@ The system uses **gradual scoring** across 7 detection methods:
 **Threshold:** 60% confidence (configurable in `liveness_config.md`)
 
 **Performance:**
-- ID cards/photos: 48-56% → ❌ Rejected
-- Real face (still): 62-68% → ✅ Accepted
-- Real face (moving): 75-85% → ✅ Accepted
 
 For detailed configuration, see `liveness_config.md`.
 
+
+## 🧩 Frame Pipeline & Hooks
+
+The real-time loop is kept thin via `process_frame_shell` (see `src/pipeline/processing.py`).
+
+- Detect callback: returns either `[(x, y, w, h), ...]` or a context dict with `faces` plus optional keys like `face_assignments`, `primary_face_id`, and `warnings`.
+- Process callback: receives `(frame, face_idx, bbox, context)` and returns per-face results (identity, confidence, box color, etc.).
+- UI callback: receives `(frame, results, context)` for drawing and status updates.
+
+Hooks to extend:
+- Liveness: `src/pipeline/liveness_adapter.py` wraps blink-only vs. heavier paths; integrate new signals there before the UI.
+- Explainability: `ExplainabilityEngine` in `app.py` can consume the same per-face results.
+- Async/optimized path: the vectorized pipeline currently lives in `src/performance_optimized_core.py`; keep callback shapes aligned with `process_frame_shell` when adding parity.
 ### Explainable AI (XAI)
 
 ```bash

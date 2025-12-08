@@ -279,11 +279,19 @@ def update_face_lists(
 def process_frame_shell(frame, *, detect_faces_cb, process_face_cb, update_ui_cb):
     """Orchestrate a single frame through detection, per-face processing, and UI update.
 
-    The callbacks provide flexibility for UI/state management while keeping orchestration
-    predictable. The detection callback can return either a list of face bboxes or a
-    context dict containing ``faces`` plus any extra metadata. The processing callback
-    receives the frame, the face index, the bbox, and the detection context. The UI
-    callback receives the frame, the list of per-face results, and the detection context.
+    Callback contracts (keep these stable across async/sync paths):
+    - detect_faces_cb(frame) ->
+        * list[tuple[int, int, int, int]] of bboxes, or
+        * dict with at least ``faces``: list[bbox]. Optional context keys used by callers:
+          ``all_faces`` (raw detections), ``face_assignments`` (tracker ids),
+          ``primary_face_id`` (int), ``frame_time_ms`` (float), ``warnings`` (list[str]).
+    - process_face_cb(frame, face_idx, bbox, context) -> any serializable result per face.
+      Typical keys: ``identity``, ``confidence``, ``box_color``, ``face_idx``, ``bbox``.
+    - update_ui_cb(frame, per_face_results, context) -> None (side-effects only).
+
+    The detection callback can return either a list of face bboxes or a context dict
+    containing ``faces`` plus any extra metadata; we normalize to a context dict to keep
+    downstream callbacks consistent.
     """
 
     detection_ctx = detect_faces_cb(frame)
