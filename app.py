@@ -1081,10 +1081,10 @@ class AttendanceSystemGUI:
         """Update debug information display (legacy stats)"""
         threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
         debug_text = f"""Recognition Threshold: {threshold:.3f}
-Process Every N Frames: {self.PROCESS_EVERY_N_FRAMES}
-Model: {"Loaded" if verification_model else "Not Loaded"}
-Camera Status: {"Active" if self.running else "Inactive"}
-Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
+                        Process Every N Frames: {self.PROCESS_EVERY_N_FRAMES}
+                        Model: {"Loaded" if verification_model else "Not Loaded"}
+                        Camera Status: {"Active" if self.running else "Inactive"}
+                        Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         if hasattr(self, 'debug_text'):
             self.debug_text.set(debug_text)
     
@@ -1855,6 +1855,7 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         except Exception as e:
             print(f"[CACHE] Error clearing cache: {e}")
             messagebox.showerror("Error", f"Failed to clear cache: {str(e)}")
+            
     def run_debug_analysis(self):
         """Run debug analysis"""
         try:
@@ -1865,18 +1866,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
             messagebox.showinfo("Complete", "Check terminal")
         except Exception as e:
             messagebox.showerror("Error", str(e))
-
-    def run_debug_analysis(self):
-        """Run debug analysis"""
-        try:
-            if len(employee_db) < 2:
-                messagebox.showinfo("Debug", "Need 2+ employees")
-                return
-            self.analyze_embedding_distribution()
-            messagebox.showinfo("Debug Complete", "Check terminal")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
     
     def reset_for_next_user(self):
         """Reset the system for next user - single person experience"""
@@ -3340,8 +3329,6 @@ Registration Mode: {"ON" if self.registration_mode else "OFF"}"""
         
         # Close button
         ttk.Button(content, text="Close", command=self.view_employees).pack(pady=(10, 0))
-    
-
     
     def edit_employee(self):
         """Batch edit employees with checkboxes"""

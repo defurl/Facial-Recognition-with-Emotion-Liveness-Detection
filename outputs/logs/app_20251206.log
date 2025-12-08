@@ -1,0 +1,550 @@
+2025-12-06 15:08:32,116 - INFO - ============================================================
+2025-12-06 15:08:32,116 - INFO - Application started
+2025-12-06 15:08:32,116 - INFO - ============================================================
+2025-12-06 15:08:41,124 - INFO - Camera 2 opened successfully
+2025-12-06 15:08:41,125 - INFO - Camera opened successfully
+2025-12-06 15:08:41,190 - DEBUG - No frame available
+2025-12-06 15:08:41,233 - DEBUG - No frame available
+2025-12-06 15:08:41,273 - DEBUG - No frame available
+2025-12-06 15:08:41,315 - DEBUG - No frame available
+2025-12-06 15:08:41,356 - DEBUG - No frame available
+2025-12-06 15:08:41,397 - DEBUG - No frame available
+2025-12-06 15:08:41,438 - DEBUG - No frame available
+2025-12-06 15:08:41,479 - DEBUG - No frame available
+2025-12-06 15:08:41,520 - DEBUG - No frame available
+2025-12-06 15:08:41,561 - DEBUG - No frame available
+2025-12-06 15:08:41,602 - DEBUG - No frame available
+2025-12-06 15:08:41,643 - DEBUG - No frame available
+2025-12-06 15:08:41,674 - DEBUG - Frame capture OK: (480, 640, 3), frame #0
+2025-12-06 15:08:51,743 - DEBUG - Frame capture OK: (480, 640, 3), frame #300
+2025-12-06 15:09:01,810 - DEBUG - Frame capture OK: (480, 640, 3), frame #600
+2025-12-06 15:09:11,862 - DEBUG - Frame 900 queued
+2025-12-06 15:09:11,881 - DEBUG - Frame capture OK: (480, 640, 3), frame #900
+2025-12-06 15:10:07,767 - INFO - ============================================================
+2025-12-06 15:10:07,767 - INFO - Application started
+2025-12-06 15:10:07,767 - INFO - ============================================================
+2025-12-06 15:10:14,130 - INFO - Camera 2 opened successfully
+2025-12-06 15:10:14,131 - INFO - Camera opened successfully
+2025-12-06 15:10:14,205 - DEBUG - No frame available
+2025-12-06 15:10:14,248 - DEBUG - No frame available
+2025-12-06 15:10:14,288 - DEBUG - No frame available
+2025-12-06 15:10:14,329 - DEBUG - No frame available
+2025-12-06 15:10:14,371 - DEBUG - No frame available
+2025-12-06 15:10:14,412 - DEBUG - No frame available
+2025-12-06 15:10:14,453 - DEBUG - No frame available
+2025-12-06 15:10:14,494 - DEBUG - No frame available
+2025-12-06 15:10:14,536 - DEBUG - No frame available
+2025-12-06 15:10:14,577 - DEBUG - No frame available
+2025-12-06 15:10:14,618 - DEBUG - No frame available
+2025-12-06 15:10:14,659 - DEBUG - No frame available
+2025-12-06 15:10:14,678 - DEBUG - Frame capture OK: (480, 640, 3), frame #0
+2025-12-06 15:10:24,812 - DEBUG - Frame 300 queued
+2025-12-06 15:10:24,813 - DEBUG - Frame capture OK: (480, 640, 3), frame #300
+2025-12-06 15:10:25,440 - DEBUG - Early-ID: quyen (conf: 43%)
+2025-12-06 15:10:25,455 - INFO - Added to cache: quyen
+2025-12-06 15:10:25,802 - DEBUG - Early-ID: toan (conf: 45%)
+2025-12-06 15:10:25,802 - DEBUG - Cache fallback match: quyen
+2025-12-06 15:10:25,802 - INFO - Cache hit: quyen - skip liveness
+2025-12-06 15:10:25,803 - DEBUG - Safety: quyen cached -> Real
+2025-12-06 15:10:25,815 - INFO - Added to cache: toan
+2025-12-06 15:10:26,154 - DEBUG - Early-ID: toan (conf: 35%)
+2025-12-06 15:10:26,154 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:26,154 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:26,484 - DEBUG - Early-ID: toan (conf: 46%)
+2025-12-06 15:10:26,484 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:26,484 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:26,832 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:26,833 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:26,833 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:26,838 - DEBUG - No frame available
+2025-12-06 15:10:26,860 - DEBUG - IDENTITY DEBUG - Frame 360
+2025-12-06 15:10:27,834 - DEBUG - Early-ID: toan (conf: 48%)
+2025-12-06 15:10:27,834 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:27,834 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:28,178 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:28,179 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:28,179 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:28,529 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:28,530 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:28,530 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:28,871 - DEBUG - Early-ID: toan (conf: 44%)
+2025-12-06 15:10:28,871 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:28,871 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:29,181 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:29,181 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:29,181 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:29,194 - DEBUG - IDENTITY DEBUG - Frame 420
+2025-12-06 15:10:29,526 - DEBUG - Early-ID: toan (conf: 41%)
+2025-12-06 15:10:29,526 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:29,527 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:29,875 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:29,875 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:29,875 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:30,193 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:30,193 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:30,202 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:30,523 - DEBUG - Early-ID: toan (conf: 37%)
+2025-12-06 15:10:30,523 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:30,523 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:30,868 - DEBUG - Early-ID: toan (conf: 55%)
+2025-12-06 15:10:30,868 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:30,868 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:31,198 - DEBUG - Early-ID: toan (conf: 51%)
+2025-12-06 15:10:31,198 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:31,198 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:31,210 - DEBUG - IDENTITY DEBUG - Frame 480
+2025-12-06 15:10:31,560 - DEBUG - Early-ID: toan (conf: 35%)
+2025-12-06 15:10:31,560 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:31,560 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:31,870 - DEBUG - Early-ID: quyen (conf: 35%)
+2025-12-06 15:10:31,870 - INFO - Cache hit: quyen - skip liveness
+2025-12-06 15:10:31,870 - DEBUG - Safety: quyen cached -> Real
+2025-12-06 15:10:32,226 - DEBUG - Early-ID: toan (conf: 55%)
+2025-12-06 15:10:32,226 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:32,226 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:32,540 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:32,540 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:32,540 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:32,551 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:10:32,551 - DEBUG - Cache kept: ['toan', 'quyen']
+2025-12-06 15:10:32,896 - DEBUG - Early-ID: toan (conf: 33%)
+2025-12-06 15:10:32,896 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:32,896 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:33,206 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:33,207 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:33,207 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:33,215 - DEBUG - No frame available
+2025-12-06 15:10:33,219 - DEBUG - IDENTITY DEBUG - Frame 540
+2025-12-06 15:10:33,550 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:33,550 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:33,550 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:33,875 - DEBUG - Cache fallback match: toan
+2025-12-06 15:10:33,875 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:33,875 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:34,233 - DEBUG - Early-ID: toan (conf: 32%)
+2025-12-06 15:10:34,233 - INFO - Cache hit: toan - skip liveness
+2025-12-06 15:10:34,233 - DEBUG - Safety: toan cached -> Real
+2025-12-06 15:10:34,583 - DEBUG - Early-ID: quyen (conf: 36%)
+2025-12-06 15:10:34,584 - INFO - Cache hit: quyen - skip liveness
+2025-12-06 15:10:34,584 - DEBUG - Safety: quyen cached -> Real
+2025-12-06 15:10:35,235 - DEBUG - Frame capture OK: (480, 640, 3), frame #600
+2025-12-06 15:10:45,303 - DEBUG - Frame capture OK: (480, 640, 3), frame #900
+2025-12-06 15:10:55,375 - DEBUG - Frame capture OK: (480, 640, 3), frame #1200
+2025-12-06 15:11:05,447 - DEBUG - Frame capture OK: (480, 640, 3), frame #1500
+2025-12-06 15:11:15,519 - DEBUG - Frame capture OK: (480, 640, 3), frame #1800
+2025-12-06 15:11:25,587 - DEBUG - Frame capture OK: (480, 640, 3), frame #2100
+2025-12-06 15:11:35,663 - DEBUG - Frame capture OK: (480, 640, 3), frame #2400
+2025-12-06 15:11:45,709 - DEBUG - Frame 2700 queued
+2025-12-06 15:11:45,735 - DEBUG - Frame capture OK: (480, 640, 3), frame #2700
+2025-12-06 15:11:55,807 - DEBUG - Frame capture OK: (480, 640, 3), frame #3000
+2025-12-06 15:12:05,881 - DEBUG - Frame capture OK: (480, 640, 3), frame #3300
+2025-12-06 15:12:15,926 - DEBUG - Frame 3600 queued
+2025-12-06 15:12:15,947 - DEBUG - Frame capture OK: (480, 640, 3), frame #3600
+2025-12-06 15:12:26,019 - DEBUG - Frame capture OK: (480, 640, 3), frame #3900
+2025-12-06 15:12:36,070 - DEBUG - Frame 4200 queued
+2025-12-06 15:12:36,091 - DEBUG - Frame capture OK: (480, 640, 3), frame #4200
+2025-12-06 15:12:46,137 - DEBUG - Frame 4500 queued
+2025-12-06 15:12:46,163 - DEBUG - Frame capture OK: (480, 640, 3), frame #4500
+2025-12-06 15:12:56,235 - DEBUG - Frame capture OK: (480, 640, 3), frame #4800
+2025-12-06 15:13:06,281 - DEBUG - Frame 5100 queued
+2025-12-06 15:13:06,303 - DEBUG - Frame capture OK: (480, 640, 3), frame #5100
+2025-12-06 15:13:14,359 - INFO - Spoof reset: cache_cleared
+2025-12-06 15:13:15,846 - INFO - Cache cleared: 2 users removed
+2025-12-06 15:13:16,375 - DEBUG - Frame capture OK: (480, 640, 3), frame #5400
+2025-12-06 15:13:26,420 - DEBUG - Frame 5700 queued
+2025-12-06 15:13:26,447 - DEBUG - Frame capture OK: (480, 640, 3), frame #5700
+2025-12-06 15:13:36,519 - DEBUG - Frame capture OK: (480, 640, 3), frame #6000
+2025-12-06 15:13:46,591 - DEBUG - Frame capture OK: (480, 640, 3), frame #6300
+2025-12-06 15:13:56,660 - DEBUG - Frame capture OK: (480, 640, 3), frame #6600
+2025-12-06 15:14:06,732 - DEBUG - Frame capture OK: (480, 640, 3), frame #6900
+2025-12-06 15:14:16,785 - DEBUG - Frame 7200 queued
+2025-12-06 15:14:16,804 - DEBUG - Frame capture OK: (480, 640, 3), frame #7200
+2025-12-06 15:14:26,852 - DEBUG - Frame 7500 queued
+2025-12-06 15:14:26,877 - DEBUG - Frame capture OK: (480, 640, 3), frame #7500
+2025-12-06 15:14:36,923 - DEBUG - Frame 7800 queued
+2025-12-06 15:14:36,949 - DEBUG - Frame capture OK: (480, 640, 3), frame #7800
+2025-12-06 15:14:47,017 - DEBUG - Frame capture OK: (480, 640, 3), frame #8100
+2025-12-06 15:14:57,068 - DEBUG - Frame 8400 queued
+2025-12-06 15:14:57,089 - DEBUG - Frame capture OK: (480, 640, 3), frame #8400
+2025-12-06 15:15:07,140 - DEBUG - Frame 8700 queued
+2025-12-06 15:15:07,161 - DEBUG - Frame capture OK: (480, 640, 3), frame #8700
+2025-12-06 15:15:17,208 - DEBUG - Frame 9000 queued
+2025-12-06 15:15:17,233 - DEBUG - Frame capture OK: (480, 640, 3), frame #9000
+2025-12-06 15:15:27,301 - DEBUG - Frame capture OK: (480, 640, 3), frame #9300
+2025-12-06 15:15:31,700 - INFO - Spoof reset: identity change
+2025-12-06 15:15:37,369 - DEBUG - Frame 9600 queued
+2025-12-06 15:15:37,389 - DEBUG - Frame capture OK: (480, 640, 3), frame #9600
+2025-12-06 15:15:47,461 - DEBUG - Frame capture OK: (480, 640, 3), frame #9900
+2025-12-06 15:15:57,533 - DEBUG - Frame capture OK: (480, 640, 3), frame #10200
+2025-12-06 15:16:07,605 - DEBUG - Frame capture OK: (480, 640, 3), frame #10500
+2025-12-06 15:16:17,677 - DEBUG - Frame capture OK: (480, 640, 3), frame #10800
+2025-12-06 15:16:27,723 - DEBUG - Frame 11100 queued
+2025-12-06 15:16:27,745 - DEBUG - Frame capture OK: (480, 640, 3), frame #11100
+2025-12-06 15:16:37,816 - DEBUG - Frame capture OK: (480, 640, 3), frame #11400
+2025-12-06 15:16:47,868 - DEBUG - Frame 11700 queued
+2025-12-06 15:16:47,888 - DEBUG - Frame capture OK: (480, 640, 3), frame #11700
+2025-12-06 15:16:57,961 - DEBUG - Frame capture OK: (480, 640, 3), frame #12000
+2025-12-06 15:17:08,032 - DEBUG - Frame capture OK: (480, 640, 3), frame #12300
+2025-12-06 15:17:18,078 - DEBUG - Frame 12600 queued
+2025-12-06 15:17:18,100 - DEBUG - Frame capture OK: (480, 640, 3), frame #12600
+2025-12-06 15:17:28,151 - DEBUG - Frame 12900 queued
+2025-12-06 15:17:28,172 - DEBUG - Frame capture OK: (480, 640, 3), frame #12900
+2025-12-06 15:17:38,244 - DEBUG - Frame capture OK: (480, 640, 3), frame #13200
+2025-12-06 15:17:48,293 - DEBUG - Frame 13500 queued
+2025-12-06 15:17:48,316 - DEBUG - Frame capture OK: (480, 640, 3), frame #13500
+2025-12-06 15:17:58,384 - DEBUG - Frame capture OK: (480, 640, 3), frame #13800
+2025-12-06 15:18:08,456 - DEBUG - Frame capture OK: (480, 640, 3), frame #14100
+2025-12-06 15:18:18,510 - DEBUG - Frame 14400 queued
+2025-12-06 15:18:18,528 - DEBUG - Frame capture OK: (480, 640, 3), frame #14400
+2025-12-06 15:18:28,576 - DEBUG - Frame 14700 queued
+2025-12-06 15:18:28,600 - DEBUG - Frame capture OK: (480, 640, 3), frame #14700
+2025-12-06 15:18:38,672 - DEBUG - Frame capture OK: (480, 640, 3), frame #15000
+2025-12-06 15:18:48,719 - DEBUG - Frame 15300 queued
+2025-12-06 15:18:48,741 - DEBUG - Frame capture OK: (480, 640, 3), frame #15300
+2025-12-06 15:18:49,122 - DEBUG - Early-ID: zilus (conf: 32%)
+2025-12-06 15:18:49,122 - INFO - Spoof reset: identity change
+2025-12-06 15:18:58,829 - DEBUG - Frame capture OK: (480, 640, 3), frame #15600
+2025-12-06 15:19:08,901 - DEBUG - Frame capture OK: (480, 640, 3), frame #15900
+2025-12-06 15:19:18,952 - DEBUG - Frame 16200 queued
+2025-12-06 15:19:18,974 - DEBUG - Frame capture OK: (480, 640, 3), frame #16200
+2025-12-06 15:19:29,046 - DEBUG - Frame capture OK: (480, 640, 3), frame #16500
+2025-12-06 15:19:39,118 - DEBUG - Frame capture OK: (480, 640, 3), frame #16800
+2025-12-06 15:19:49,187 - DEBUG - Frame capture OK: (480, 640, 3), frame #17100
+2025-12-06 15:20:01,490 - INFO - ============================================================
+2025-12-06 15:20:01,490 - INFO - Application started
+2025-12-06 15:20:01,490 - INFO - ============================================================
+2025-12-06 15:22:49,666 - INFO - Camera 2 opened successfully
+2025-12-06 15:22:49,666 - INFO - Camera opened successfully
+2025-12-06 15:22:49,733 - DEBUG - No frame available
+2025-12-06 15:22:49,774 - DEBUG - No frame available
+2025-12-06 15:22:49,815 - DEBUG - No frame available
+2025-12-06 15:22:49,856 - DEBUG - No frame available
+2025-12-06 15:22:49,897 - DEBUG - No frame available
+2025-12-06 15:22:49,939 - DEBUG - No frame available
+2025-12-06 15:22:49,980 - DEBUG - No frame available
+2025-12-06 15:22:50,021 - DEBUG - No frame available
+2025-12-06 15:22:50,062 - DEBUG - No frame available
+2025-12-06 15:22:50,103 - DEBUG - No frame available
+2025-12-06 15:22:50,144 - DEBUG - No frame available
+2025-12-06 15:22:50,185 - DEBUG - No frame available
+2025-12-06 15:22:50,217 - DEBUG - Frame capture OK: (480, 640, 3), frame #0
+2025-12-06 15:22:58,307 - DEBUG - Early-ID: zilus (conf: 35%)
+2025-12-06 15:22:58,614 - DEBUG - Early-ID: zilus (conf: 42%)
+2025-12-06 15:22:58,966 - DEBUG - Early-ID: zilus (conf: 52%)
+2025-12-06 15:22:59,328 - DEBUG - Early-ID: zilus (conf: 40%)
+2025-12-06 15:22:59,971 - DEBUG - Early-ID: zilus (conf: 36%)
+2025-12-06 15:23:00,311 - DEBUG - Early-ID: zilus (conf: 33%)
+2025-12-06 15:23:00,312 - DEBUG - No frame available
+2025-12-06 15:23:00,319 - DEBUG - Frame 300 queued
+2025-12-06 15:23:00,320 - DEBUG - Frame capture OK: (480, 640, 3), frame #300
+2025-12-06 15:23:00,653 - DEBUG - Early-ID: zilus (conf: 57%)
+2025-12-06 15:23:00,978 - DEBUG - Early-ID: zilus (conf: 64%)
+2025-12-06 15:23:00,994 - INFO - Added to cache: zilus
+2025-12-06 15:23:01,314 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:01,314 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:01,314 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:01,654 - DEBUG - Early-ID: zilus (conf: 62%)
+2025-12-06 15:23:01,654 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:01,655 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:02,001 - DEBUG - Early-ID: zilus (conf: 65%)
+2025-12-06 15:23:02,001 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:02,001 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:02,322 - DEBUG - No frame available
+2025-12-06 15:23:02,334 - DEBUG - Early-ID: zilus (conf: 41%)
+2025-12-06 15:23:02,335 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:02,335 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:02,347 - DEBUG - IDENTITY DEBUG - Frame 360
+2025-12-06 15:23:02,681 - DEBUG - Early-ID: zilus (conf: 38%)
+2025-12-06 15:23:02,681 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:02,681 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:03,001 - DEBUG - Early-ID: zilus (conf: 50%)
+2025-12-06 15:23:03,001 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:03,001 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:03,345 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:03,345 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:03,346 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:03,697 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:03,698 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:03,698 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:03,721 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:03,721 - DEBUG - Cache kept: ['zilus']
+2025-12-06 15:23:04,016 - DEBUG - Early-ID: zilus (conf: 48%)
+2025-12-06 15:23:04,016 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:04,017 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:04,354 - DEBUG - Early-ID: zilus (conf: 49%)
+2025-12-06 15:23:04,355 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:04,355 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:04,370 - DEBUG - IDENTITY DEBUG - Frame 420
+2025-12-06 15:23:04,689 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:04,690 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:04,690 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:05,025 - DEBUG - Early-ID: zilus (conf: 54%)
+2025-12-06 15:23:05,025 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:05,025 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:05,356 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:05,356 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:05,356 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:05,695 - DEBUG - Early-ID: zilus (conf: 54%)
+2025-12-06 15:23:05,695 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:05,695 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:06,030 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:06,030 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:06,030 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:06,354 - DEBUG - Early-ID: zilus (conf: 52%)
+2025-12-06 15:23:06,354 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:06,354 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:06,365 - DEBUG - No frame available
+2025-12-06 15:23:06,368 - DEBUG - IDENTITY DEBUG - Frame 480
+2025-12-06 15:23:06,702 - DEBUG - Early-ID: zilus (conf: 66%)
+2025-12-06 15:23:06,702 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:06,703 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:06,725 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:06,725 - DEBUG - Cache kept: ['zilus']
+2025-12-06 15:23:07,048 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:07,048 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:07,048 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:07,386 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:07,387 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:07,387 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:07,711 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:07,712 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:07,712 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:08,045 - DEBUG - Early-ID: zilus (conf: 64%)
+2025-12-06 15:23:08,045 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:08,045 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:08,378 - DEBUG - Early-ID: zilus (conf: 58%)
+2025-12-06 15:23:08,379 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:08,379 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:08,393 - DEBUG - IDENTITY DEBUG - Frame 540
+2025-12-06 15:23:08,717 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:08,717 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:08,717 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:08,898 - INFO - Spoof reset: cache_cleared
+2025-12-06 15:23:09,043 - DEBUG - Early-ID: zilus (conf: 58%)
+2025-12-06 15:23:09,388 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:09,736 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:10,061 - DEBUG - Early-ID: zilus (conf: 58%)
+2025-12-06 15:23:10,076 - INFO - Cache cleared: 1 users removed
+2025-12-06 15:23:10,391 - DEBUG - No frame available
+2025-12-06 15:23:10,409 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:10,411 - DEBUG - Frame 600 queued
+2025-12-06 15:23:10,412 - DEBUG - Frame capture OK: (480, 640, 3), frame #600
+2025-12-06 15:23:10,723 - DEBUG - Early-ID: zilus (conf: 52%)
+2025-12-06 15:23:11,064 - DEBUG - Early-ID: zilus (conf: 50%)
+2025-12-06 15:23:11,407 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:11,758 - DEBUG - Early-ID: zilus (conf: 47%)
+2025-12-06 15:23:12,071 - DEBUG - Early-ID: zilus (conf: 47%)
+2025-12-06 15:23:12,408 - DEBUG - Early-ID: zilus (conf: 47%)
+2025-12-06 15:23:12,742 - DEBUG - Early-ID: zilus (conf: 49%)
+2025-12-06 15:23:13,094 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:13,426 - DEBUG - Early-ID: zilus (conf: 44%)
+2025-12-06 15:23:13,745 - DEBUG - Early-ID: zilus (conf: 47%)
+2025-12-06 15:23:14,083 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:14,439 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:14,767 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:15,102 - DEBUG - Early-ID: zilus (conf: 48%)
+2025-12-06 15:23:15,455 - DEBUG - Early-ID: zilus (conf: 44%)
+2025-12-06 15:23:15,757 - DEBUG - Early-ID: zilus (conf: 57%)
+2025-12-06 15:23:16,115 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:16,457 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:16,791 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:17,116 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:17,444 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:17,788 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:17,804 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:17,804 - DEBUG - Cache kept: []
+2025-12-06 15:23:18,131 - DEBUG - Early-ID: zilus (conf: 61%)
+2025-12-06 15:23:18,459 - DEBUG - No frame available
+2025-12-06 15:23:18,464 - DEBUG - Early-ID: zilus (conf: 64%)
+2025-12-06 15:23:18,779 - DEBUG - Early-ID: zilus (conf: 57%)
+2025-12-06 15:23:19,143 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:19,461 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:19,815 - DEBUG - Early-ID: zilus (conf: 50%)
+2025-12-06 15:23:20,128 - DEBUG - Early-ID: zilus (conf: 72%)
+2025-12-06 15:23:20,465 - DEBUG - No frame available
+2025-12-06 15:23:20,492 - DEBUG - Early-ID: zilus (conf: 69%)
+2025-12-06 15:23:20,507 - DEBUG - IDENTITY DEBUG - Frame 900
+2025-12-06 15:23:20,508 - INFO - Added to cache: zilus
+2025-12-06 15:23:20,509 - DEBUG - Frame 900 queued
+2025-12-06 15:23:20,510 - DEBUG - Frame capture OK: (480, 640, 3), frame #900
+2025-12-06 15:23:20,816 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:20,816 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:20,817 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:21,141 - DEBUG - Early-ID: zilus (conf: 61%)
+2025-12-06 15:23:21,141 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:21,141 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:21,195 - INFO - Spoof reset: manual reset for next user
+2025-12-06 15:23:21,490 - DEBUG - Early-ID: zilus (conf: 65%)
+2025-12-06 15:23:21,490 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:21,490 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:21,826 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:21,826 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:21,826 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:22,136 - DEBUG - Early-ID: zilus (conf: 62%)
+2025-12-06 15:23:22,137 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:22,137 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:22,481 - DEBUG - Early-ID: zilus (conf: 45%)
+2025-12-06 15:23:22,482 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:22,482 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:22,494 - DEBUG - IDENTITY DEBUG - Frame 960
+2025-12-06 15:23:22,829 - DEBUG - Early-ID: zilus (conf: 62%)
+2025-12-06 15:23:22,829 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:22,829 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:23,131 - DEBUG - Early-ID: zilus (conf: 61%)
+2025-12-06 15:23:23,132 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:23,132 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:23,281 - INFO - Spoof reset: cache_cleared
+2025-12-06 15:23:23,487 - DEBUG - Early-ID: zilus (conf: 57%)
+2025-12-06 15:23:23,824 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:24,152 - DEBUG - Early-ID: zilus (conf: 70%)
+2025-12-06 15:23:24,506 - DEBUG - Early-ID: zilus (conf: 73%)
+2025-12-06 15:23:24,791 - INFO - Cache cleared: 1 users removed
+2025-12-06 15:23:24,823 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:25,167 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:25,509 - DEBUG - Early-ID: zilus (conf: 68%)
+2025-12-06 15:23:25,854 - DEBUG - Early-ID: zilus (conf: 65%)
+2025-12-06 15:23:26,191 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:26,502 - DEBUG - Early-ID: zilus (conf: 69%)
+2025-12-06 15:23:26,866 - DEBUG - Early-ID: zilus (conf: 70%)
+2025-12-06 15:23:27,166 - DEBUG - Early-ID: zilus (conf: 70%)
+2025-12-06 15:23:27,515 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:27,858 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:28,196 - DEBUG - Early-ID: zilus (conf: 42%)
+2025-12-06 15:23:28,520 - DEBUG - Early-ID: zilus (conf: 43%)
+2025-12-06 15:23:28,863 - DEBUG - Early-ID: zilus (conf: 45%)
+2025-12-06 15:23:29,193 - DEBUG - Early-ID: zilus (conf: 51%)
+2025-12-06 15:23:29,520 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:29,868 - DEBUG - Early-ID: zilus (conf: 49%)
+2025-12-06 15:23:30,210 - DEBUG - Early-ID: zilus (conf: 50%)
+2025-12-06 15:23:30,538 - DEBUG - No frame available
+2025-12-06 15:23:30,541 - DEBUG - Early-ID: zilus (conf: 49%)
+2025-12-06 15:23:30,544 - DEBUG - Frame 1200 queued
+2025-12-06 15:23:30,544 - DEBUG - Frame capture OK: (480, 640, 3), frame #1200
+2025-12-06 15:23:30,901 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:31,217 - DEBUG - Early-ID: zilus (conf: 41%)
+2025-12-06 15:23:31,557 - DEBUG - Early-ID: zilus (conf: 54%)
+2025-12-06 15:23:31,883 - DEBUG - Early-ID: zilus (conf: 41%)
+2025-12-06 15:23:32,228 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:32,567 - DEBUG - Early-ID: zilus (conf: 43%)
+2025-12-06 15:23:32,892 - DEBUG - Early-ID: zilus (conf: 62%)
+2025-12-06 15:23:32,904 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:32,904 - DEBUG - Cache kept: []
+2025-12-06 15:23:33,260 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:33,589 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:33,923 - DEBUG - Early-ID: zilus (conf: 62%)
+2025-12-06 15:23:33,943 - INFO - Added to cache: zilus
+2025-12-06 15:23:34,246 - DEBUG - Early-ID: zilus (conf: 65%)
+2025-12-06 15:23:34,247 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:34,247 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:34,595 - DEBUG - Early-ID: zilus (conf: 49%)
+2025-12-06 15:23:34,596 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:34,596 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:34,607 - DEBUG - IDENTITY DEBUG - Frame 1320
+2025-12-06 15:23:37,462 - INFO - Spoof reset: cache_cleared
+2025-12-06 15:23:38,602 - DEBUG - No frame available
+2025-12-06 15:23:38,672 - INFO - Cache cleared: 1 users removed
+2025-12-06 15:23:38,968 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:39,303 - DEBUG - Early-ID: zilus (conf: 52%)
+2025-12-06 15:23:39,316 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:39,316 - DEBUG - Cache kept: []
+2025-12-06 15:23:39,648 - DEBUG - Early-ID: zilus (conf: 63%)
+2025-12-06 15:23:39,988 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:40,340 - DEBUG - Early-ID: zilus (conf: 61%)
+2025-12-06 15:23:40,357 - INFO - Added to cache: zilus
+2025-12-06 15:23:40,676 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:40,676 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:40,676 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:40,688 - DEBUG - IDENTITY DEBUG - Frame 1500
+2025-12-06 15:23:40,689 - DEBUG - No frame available
+2025-12-06 15:23:40,690 - DEBUG - Frame 1500 queued
+2025-12-06 15:23:40,690 - DEBUG - Frame capture OK: (480, 640, 3), frame #1500
+2025-12-06 15:23:40,988 - DEBUG - Early-ID: zilus (conf: 68%)
+2025-12-06 15:23:40,988 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:40,989 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:41,314 - DEBUG - Early-ID: zilus (conf: 61%)
+2025-12-06 15:23:41,314 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:41,314 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:41,675 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:41,675 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:41,675 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:41,999 - DEBUG - Early-ID: zilus (conf: 59%)
+2025-12-06 15:23:41,999 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:41,999 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:42,333 - DEBUG - Early-ID: zilus (conf: 68%)
+2025-12-06 15:23:42,334 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:42,334 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:42,670 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:42,670 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:42,670 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:42,683 - DEBUG - IDENTITY DEBUG - Frame 1560
+2025-12-06 15:23:42,991 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:42,991 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:42,991 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:43,006 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:43,006 - DEBUG - Cache kept: ['zilus']
+2025-12-06 15:23:43,355 - DEBUG - Early-ID: zilus (conf: 66%)
+2025-12-06 15:23:43,355 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:43,355 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:43,668 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:43,668 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:43,669 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:44,028 - DEBUG - Early-ID: zilus (conf: 58%)
+2025-12-06 15:23:44,029 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:44,029 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:44,368 - DEBUG - Early-ID: zilus (conf: 65%)
+2025-12-06 15:23:44,368 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:44,369 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:44,706 - DEBUG - Early-ID: zilus (conf: 60%)
+2025-12-06 15:23:44,706 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:44,707 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:44,713 - DEBUG - No frame available
+2025-12-06 15:23:44,723 - DEBUG - IDENTITY DEBUG - Frame 1620
+2025-12-06 15:23:45,013 - DEBUG - Early-ID: zilus (conf: 57%)
+2025-12-06 15:23:45,013 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:45,014 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:45,369 - DEBUG - Early-ID: zilus (conf: 51%)
+2025-12-06 15:23:45,370 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:45,370 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:45,708 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:45,708 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:45,708 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:46,021 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:46,021 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:46,021 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:46,380 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:46,380 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:46,388 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:46,414 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:46,414 - DEBUG - Cache kept: ['zilus']
+2025-12-06 15:23:46,702 - DEBUG - No frame available
+2025-12-06 15:23:46,719 - DEBUG - Early-ID: zilus (conf: 47%)
+2025-12-06 15:23:46,719 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:46,719 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:46,738 - DEBUG - IDENTITY DEBUG - Frame 1680
+2025-12-06 15:23:47,042 - DEBUG - Early-ID: zilus (conf: 54%)
+2025-12-06 15:23:47,043 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:47,043 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:47,374 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:47,374 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:47,374 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:47,717 - DEBUG - Early-ID: zilus (conf: 55%)
+2025-12-06 15:23:47,717 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:47,717 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:48,031 - DEBUG - Early-ID: zilus (conf: 51%)
+2025-12-06 15:23:48,031 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:48,031 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:48,366 - DEBUG - Early-ID: zilus (conf: 51%)
+2025-12-06 15:23:48,366 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:48,366 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:48,732 - DEBUG - Early-ID: zilus (conf: 56%)
+2025-12-06 15:23:48,732 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:48,733 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:48,747 - DEBUG - IDENTITY DEBUG - Frame 1740
+2025-12-06 15:23:49,041 - DEBUG - Early-ID: zilus (conf: 52%)
+2025-12-06 15:23:49,041 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:49,041 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:49,395 - DEBUG - Early-ID: zilus (conf: 53%)
+2025-12-06 15:23:49,396 - INFO - Cache hit: zilus - skip liveness
+2025-12-06 15:23:49,396 - DEBUG - Safety: zilus cached -> Real
+2025-12-06 15:23:49,407 - INFO - Spoof reset: identity lock timeout
+2025-12-06 15:23:49,407 - DEBUG - Cache kept: ['zilus']

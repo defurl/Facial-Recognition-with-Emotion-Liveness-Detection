@@ -149,7 +149,9 @@ def sample_subset(paths: List[Path], labels: List[int], sample_size: Optional[in
 
 
 def load_model(model_path: Path, num_classes: int) -> FaceEmbeddingCNN:
-    model = FaceEmbeddingCNN(embedding_dim=EMBEDDING_DIM, num_classes=4000).to(DEVICE)
+    """Load embedding model with the correct classification head dimension."""
+
+    model = FaceEmbeddingCNN(embedding_dim=EMBEDDING_DIM, num_classes=num_classes or 4000).to(DEVICE)
     state_dict = torch.load(model_path, map_location=DEVICE)
     model.load_state_dict(state_dict)
     model.eval()
@@ -162,23 +164,45 @@ def extract_embeddings(
     batch_size: int,
     num_workers: int,
     mode: str,
+    use_amp: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    embeddings: List[np.ndarray] = []
-    labels: List[np.ndarray] = []
+    """Stream embeddings with minimal copies and worker reuse."""
 
-    with torch.no_grad():
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
+    )
+
+    embedding_store: Optional[np.ndarray] = None
+    label_store: Optional[np.ndarray] = None
+    offset = 0
+    amp_enabled = use_amp and torch.cuda.is_available()
+
+    with torch.inference_mode(), torch.cuda.amp.autocast(enabled=amp_enabled):
         for images, batch_labels in loader:
-            images = images.to(DEVICE)
+            images = images.to(DEVICE, non_blocking=True)
             outputs = model(images, mode=mode)
             if mode == "classification":
                 outputs = torch.nn.functional.softmax(outputs, dim=1)
-            embeddings.append(outputs.cpu().numpy())
-            labels.append(batch_labels.numpy())
 
-    emb = np.concatenate(embeddings, axis=0)
-    lab = np.concatenate(labels, axis=0)
-    return emb, lab
+            outputs_np = outputs.detach().cpu().numpy()
+            batch_labels_np = batch_labels.numpy()
+            batch_size_actual = outputs_np.shape[0]
+
+            if embedding_store is None:
+                embedding_store = np.empty((len(dataset), outputs_np.shape[1]), dtype=np.float32)
+                label_store = np.empty(len(dataset), dtype=np.int64)
+
+            embedding_store[offset : offset + batch_size_actual] = outputs_np
+            label_store[offset : offset + batch_size_actual] = batch_labels_np
+            offset += batch_size_actual
+
+    assert embedding_store is not None and label_store is not None
+    return embedding_store, label_store
 
 
 def maybe_run_tsne(
@@ -306,25 +330,15 @@ def run_deep_knn(
     indices = indices[:visualize_count]
 
     for idx_position, query_idx in enumerate(indices, start=1):
-        query_embedding = embeddings_query[[query_idx]]
-        query_label = labels_query[query_idx]
-        distances_row, labels_row, indices_row = knn_search(
-            knn_model,
-            embeddings_gallery,
-            labels_gallery,
-            query_embedding,
-            k=k,
-            exclude_self=exclude_self,
-        )
-        distances_row = distances_row[0]
-        labels_row = labels_row[0]
-        indices_row = indices_row[0]
+        distances_row = distances[query_idx]
+        labels_row = neighbour_labels[query_idx]
+        indices_row = neighbour_indices[query_idx]
         neighbour_paths = [str(paths_gallery[idx]) for idx in indices_row]
 
         report_path = build_output_path(output_prefix, f"_knn_example_{idx_position}.png")
         make_knn_figure(
             query_path=paths_query[query_idx],
-            query_label=class_names[query_label],
+            query_label=class_names[labels_query[query_idx]],
             neighbour_paths=neighbour_paths,
             neighbour_labels=[class_names[int(lab)] for lab in labels_row],
             neighbour_distances=distances_row,
