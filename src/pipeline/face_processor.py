@@ -26,6 +26,7 @@ from src.pipeline.processing import (
     verify_face,
 )
 from src.runtime.settings import load_gui_threshold
+from src.ui.overlays import draw_face_box_with_label, draw_rounded_rectangle
 from src.utils import crop_face_with_padding, face_mesh_detector
 
 
@@ -52,29 +53,6 @@ def role_box_color(is_primary_face: bool, is_secondary_face: bool):
 def interpolate_color(color1, color2, factor):
     """Smoothly interpolate between two colors for transitions."""
     return tuple(int(c1 + (c2 - c1) * factor) for c1, c2 in zip(color1, color2))
-
-
-def draw_rounded_rectangle(img, pt1, pt2, color, thickness=2, radius=15):
-    """Draw a rectangle with rounded corners."""
-    x1, y1 = pt1
-    x2, y2 = pt2
-
-    if thickness < 0:  # Filled
-        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
-        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
-        cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
-    else:  # Outline
-        cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness)
-        cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness)
-        cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness)
-        cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness)
-        cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness)
-        cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness)
 
 
 class FaceProcessor:
@@ -585,24 +563,7 @@ class FaceProcessor:
             "Registering...",
             "Processing...",
         ]
-        thickness = 3 if is_recognized else 2
-        draw_rounded_rectangle(frame, (x, y), (x + w, y + h), box_color, thickness, radius=12)
-
-        font = cv2.FONT_HERSHEY_DUPLEX
-        (text_w, text_h), baseline = cv2.getTextSize(display_text, font, 0.6, 2)
-        label_y = max(y - text_h - 18, 10)
-
-        label_overlay = frame.copy()
-        draw_rounded_rectangle(
-            label_overlay,
-            (x - 2, label_y),
-            (x + text_w + 24, label_y + text_h + 12),
-            (20, 20, 30),
-            -1,
-            radius=8,
-        )
-        cv2.addWeighted(label_overlay, 0.85, frame, 0.15, 0, frame)
-        cv2.putText(frame, display_text, (x + 10, label_y + text_h + 6), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        draw_face_box_with_label(frame, (x, y, w, h), box_color, display_text, is_recognized)
 
         if face_idx < MAX_CONCURRENT_FACES and g.frame_count % g.PROCESS_EVERY_N_FRAMES == 0:
             g.recognition_stats["total_detections"] += 1

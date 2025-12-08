@@ -75,12 +75,17 @@ from src.pipeline.processing import (
 from src.pipeline.liveness_adapter import LivenessAdapter
 from src.pipeline.face_processor import (
     FaceProcessor,
-    draw_rounded_rectangle,
     face_roles,
     interpolate_color,
     role_box_color,
 )
-from src.ui.overlays import draw_banner, draw_ear_graph, draw_registration_overlay, draw_status_chip
+from src.ui.overlays import (
+    draw_banner,
+    draw_ear_graph,
+    draw_face_box_with_label,
+    draw_registration_overlay,
+    draw_status_chip,
+)
 
 # Import performance optimized classes with fallback
 try:
@@ -1985,8 +1990,7 @@ class AttendanceSystemGUI:
                                             self.status_text.set(f"🔵 Step {state['step'] + 1}/{len(state['poses_required'])}: {state['instructions'][state['step']]}")
                                     except Exception as e:
                                         print(f"Capture error: {e}")
-                                        cv2.putText(frame, f"Error: {str(e)[:30]}", (10, 100), 
-                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                        draw_banner(frame, f"Error: {str(e)[:30]}", (255, 0, 0), alpha=0.9, radius=6)
                             else:
                                 state['hold_frames'] = 0
                                 
@@ -3080,11 +3084,11 @@ Quality Assessment:
                 self.face_liveness.append("Real" if is_live else "Spoof")
 
                 x, y, w, h = bbox
-                cv2.rectangle(processed_frame, (x, y), (x + w, y + h), box_color, 2)
                 emotion = res.get("emotion", "Neutral")
                 liveness = "Real" if is_live else "Spoof"
                 display_text = f"{identity} ({emotion} | {liveness})"
-                cv2.putText(processed_frame, display_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                recognized = identity not in {"Not Registered", "Error", "Spoof Detected", "Processing..."}
+                draw_face_box_with_label(processed_frame, (x, y, w, h), box_color, display_text, is_recognized=recognized)
 
             processed_frame_holder["frame"] = processed_frame
             self.queue_frame_for_display(processed_frame)
