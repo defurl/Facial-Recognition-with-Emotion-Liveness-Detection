@@ -60,6 +60,8 @@ from src.blink_detector import BlinkDetector
 from src.attendance import AttendanceLogger
 from src.explainability import ExplainabilityEngine
 from src.deep_knn import knn_predict_with_confidence, get_knn_explanation_text
+from src.runtime.models_loader import load_verification_model
+from src.runtime.db import load_employee_db, build_embedding_index
 
 # Import performance optimized classes with fallback
 try:
@@ -88,6 +90,8 @@ except ImportError as e:
 # Global variables
 verification_model = None
 employee_db = {}
+employee_index = None
+employee_offsets = []
 val_transform = None
 # Threshold persistence
 import json
@@ -113,17 +117,46 @@ def _save_gui_threshold(value: float) -> None:
 OPTIMAL_THRESHOLD_GUI = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
 
 
+def refresh_employee_index():
+    """Rebuild the contiguous embedding index for fast verification."""
+    global employee_index, employee_offsets
+    employee_index, employee_offsets = build_embedding_index(employee_db)
+
+
+def verify_embedding_fast(trial_embedding: torch.Tensor):
+    """Fast per-identity min-distance lookup using the prebuilt index."""
+    if employee_index is None or not employee_offsets:
+        return None, float("inf"), []
+
+    if trial_embedding.device != employee_index.device:
+        trial_embedding = trial_embedding.to(employee_index.device, non_blocking=True)
+
+    dist_vec = torch.cdist(trial_embedding, employee_index, p=2)[0]
+
+    results = []
+    best_name = None
+    best_dist = float("inf")
+    for name, start, end in employee_offsets:
+        if end <= start:
+            continue
+        slice_min = dist_vec[start:end].min().item()
+        results.append((name, slice_min))
+        if slice_min < best_dist:
+            best_dist = slice_min
+            best_name = name
+
+    return best_name, best_dist, results
+
+
 def load_model_and_database():
     """Load the trained model and employee database"""
-    global verification_model, employee_db, val_transform
+    global verification_model, employee_db, val_transform, employee_index, employee_offsets
     
     print("Loading model and database...")
     
     # Load model
-    verification_model = FaceEmbeddingCNN(embedding_dim=256, num_classes=4000).to(DEVICE)
+    verification_model = load_verification_model(MODEL_METRIC_PATH, DEVICE, num_classes=4000)
     if MODEL_METRIC_PATH.exists():
-        verification_model.load_state_dict(torch.load(MODEL_METRIC_PATH, map_location=DEVICE))
-        verification_model.eval()
         print(f"[OK] Loaded model from {MODEL_METRIC_PATH}")
     else:
         print(f"[WARNING] Model not found at {MODEL_METRIC_PATH}")
@@ -133,14 +166,14 @@ def load_model_and_database():
     _, val_transform = get_transforms()
     
     # Load database
-    if EMPLOYEE_DB_PATH.exists():
-        employee_db = torch.load(EMPLOYEE_DB_PATH)
+    employee_db = load_employee_db(EMPLOYEE_DB_PATH)
+    if employee_db:
         print(f"[OK] Loaded {len(employee_db)} employees from database")
         for name in employee_db:
             print(f"    - {name}")
     else:
         print("[INFO] No existing employee database. Starting fresh.")
-        employee_db = {}
+    refresh_employee_index()
 
 
 def select_primary_face(faces, frame_width, frame_height, previous_primary_idx=-1, previous_bbox=None):
@@ -1604,6 +1637,7 @@ class AttendanceSystemGUI:
                 # Save all embeddings as list
                 employee_db[self.registration_name] = self.registration_state['embeddings']
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
+                refresh_employee_index()
                 
                 # Save image copies of captured frames
                 identities_dir = Path("identities")
@@ -1744,29 +1778,22 @@ class AttendanceSystemGUI:
             image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
             
             with torch.no_grad():
-                trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+                trial_embedding = verification_model(image_tensor, mode='metric')
             
-            # Check against all cached users with very lenient threshold
+            # Check against all cached users with very lenient threshold using vectorized distances
             current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
             lenient_threshold = current_threshold * 2.0  # Very lenient for cache checking
-            
-            for cached_user in self.session_spoof_passed:
-                if cached_user in employee_db:
-                    saved_data = employee_db[cached_user]
-                    
-                    if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
-                        distances = [F.pairwise_distance(trial_embedding, emb).item() 
-                                   for emb in saved_data]
-                        distance = min(distances) if distances else float('inf')
-                    else:
-                        saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
-                        distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
-                    
-                    if distance < lenient_threshold:
-                        confidence = max(0, min(100, (1 - distance / lenient_threshold) * 100))
-                        if confidence >= 20:  # Very low threshold
-                            print(f"[CACHE-MATCH] Found cached user: {cached_user} (conf: {confidence:.0f}%, dist: {distance:.3f})")
-                            return cached_user
+
+            best_name, _, distance_results = verify_embedding_fast(trial_embedding)
+
+            # Build quick lookup for cached users
+            cached_set = set(self.session_spoof_passed)
+            for name, dist in distance_results:
+                if name in cached_set and dist < lenient_threshold:
+                    confidence = max(0, min(100, (1 - dist / lenient_threshold) * 100))
+                    if confidence >= 20:  # Very low threshold
+                        print(f"[CACHE-MATCH] Found cached user: {name} (conf: {confidence:.0f}%, dist: {dist:.3f})")
+                        return name
             
             return None
         except Exception as e:
@@ -2530,40 +2557,27 @@ class AttendanceSystemGUI:
 
                                     embedding_start = time.time()
                                     with torch.no_grad():
-                                        trial_embedding = verification_model(image_tensor, mode='metric').cpu()
+                                        trial_embedding = verification_model(image_tensor, mode='metric')
                                     embedding_time = (time.time() - embedding_start) * 1000
 
-                                    min_distance = float('inf')
-                                    self.last_identity = "Not Registered"
-                                    best_match = None
-
-                                    # Multi-embedding comparison
-                                    comparison_start = time.time()
-                                    best_match_data = None  # Track the employee data for pose matching
-                                    for name, saved_data in employee_db.items():
-                                        if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
-                                            # Compare against all stored embeddings, use minimum distance
-                                            distances = [F.pairwise_distance(trial_embedding, emb).item() 
-                                                       for emb in saved_data]
-                                            distance = min(distances) if distances else float('inf')
-                                        else:
-                                            # Single embedding (backward compatible)
-                                            saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
-                                            distance = F.pairwise_distance(trial_embedding, saved_embedding).item()
-                                        
-                                        if distance < min_distance:
-                                            min_distance = distance
-                                            best_match = name
-                                            best_match_data = saved_data  # Store for pose matching
-
-                                    comparison_time = (time.time() - comparison_start) * 1000
-                                    
                                     # Load current threshold (may have been adjusted by user)
                                     current_threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
-                                    
+                                    adjusted_threshold = current_threshold
+                                    if len(employee_db) <= 2:  # Small database - be more strict
+                                        adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
+
+                                    # Fast vectorized comparison against the prebuilt index
+                                    comparison_start = time.time()
+                                    best_match, min_distance, distance_results = verify_embedding_fast(trial_embedding)
+                                    comparison_time = (time.time() - comparison_start) * 1000
+
+                                    if best_match is None:
+                                        min_distance = float('inf')
+                                    best_match_data = employee_db.get(best_match)
+                                    self.last_identity = "Not Registered"
+
                                     # Calculate confidence and prepare result
-                                    threshold = _load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
-                                    confidence = max(0, min(100, (1 - min_distance / threshold) * 100))
+                                    confidence = max(0, min(100, (1 - min_distance / current_threshold) * 100))
                                     
                                     # DETAILED DEBUGGING: Log all distance comparisons for analysis
                                     if face_idx == 0 and self.frame_count % 30 == 0:  # Every second
@@ -2578,24 +2592,14 @@ class AttendanceSystemGUI:
                                         
                                         # Show all employee distances for debugging
                                         print("All distances:")
-                                        for name, saved_data in employee_db.items():
-                                            if USE_MULTI_EMBEDDING and isinstance(saved_data, list):
-                                                distances = [F.pairwise_distance(trial_embedding, emb).item() for emb in saved_data]
-                                                dist = min(distances) if distances else float('inf')
-                                            else:
-                                                saved_embedding = saved_data[0] if isinstance(saved_data, list) else saved_data
-                                                dist = F.pairwise_distance(trial_embedding, saved_embedding).item()
+                                        for name, dist in distance_results:
                                             conf = max(0, min(100, (1 - dist / current_threshold) * 100))
                                             status = "MATCH" if dist < adjusted_threshold else "REJECT"
                                             print(f"  {name}: dist={dist:.4f}, conf={conf:.1f}% [{status}]")
                                         print("=" * 50)
                                     
-                                    # Enhanced rejection logic for small databases
-                                    adjusted_threshold = current_threshold
-                                    if len(employee_db) <= 2:  # Small database - be more strict
-                                        adjusted_threshold = current_threshold * UNRECOGNIZED_DISTANCE_MULTIPLIER
-                                        if face_idx == 0 and self.frame_count % 60 == 0:
-                                            print(f"[THRESHOLD-WARNING] Small DB ({len(employee_db)} users) - Using strict threshold: {adjusted_threshold:.4f}")
+                                    if len(employee_db) <= 2 and face_idx == 0 and self.frame_count % 60 == 0:
+                                        print(f"[THRESHOLD-WARNING] Small DB ({len(employee_db)} users) - Using strict threshold: {adjusted_threshold:.4f}")
                                     
                                     # MULTI-PERSON ENHANCEMENT: Store all verification results for conflict resolution
                                     verification_result = {
@@ -2852,6 +2856,7 @@ class AttendanceSystemGUI:
                                     # Generate explanation data
                                     if self.explainer is not None:
                                         try:
+                                            threshold = adjusted_threshold
                                             self.current_explanation = self.explainer.explain_distance(
                                                 min_distance, threshold
                                             )
@@ -2873,8 +2878,11 @@ class AttendanceSystemGUI:
                                     
                                     # Find which pose matched (for multi-embedding)
                                     if best_match_data and USE_MULTI_EMBEDDING and isinstance(best_match_data, list):
-                                        distances_with_idx = [(F.pairwise_distance(trial_embedding, emb).item(), idx) 
-                                                             for idx, emb in enumerate(best_match_data)]
+                                        trial_device = trial_embedding.device
+                                        distances_with_idx = []
+                                        for idx, emb in enumerate(best_match_data):
+                                            emb_on_device = emb.to(trial_device, non_blocking=True)
+                                            distances_with_idx.append((F.pairwise_distance(trial_embedding, emb_on_device).item(), idx))
                                         _, self.matched_pose_index = min(distances_with_idx, key=lambda x: x[0])
                                     else:
                                         self.matched_pose_index = 0
@@ -3439,6 +3447,7 @@ class AttendanceSystemGUI:
             
             if renamed_count > 0:
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
+                refresh_employee_index()
                 messagebox.showinfo("✅ Success", f"Successfully renamed {renamed_count} employee(s) and their image folders!")
                 self.update_stats_display()
                 self.update_debug_display()
@@ -3670,6 +3679,7 @@ class AttendanceSystemGUI:
                     deleted_count += 1
                 
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
+                refresh_employee_index()
                 messagebox.showinfo("✅ Success", f"Successfully deleted {deleted_count} employee(s) and their image folders!")
                 self.update_stats_display()
                 self.update_debug_display()
@@ -3721,6 +3731,7 @@ class AttendanceSystemGUI:
                         # Continue with deletion even if folder deletion fails
                 
                 torch.save(employee_db, EMPLOYEE_DB_PATH)
+                refresh_employee_index()
                 messagebox.showinfo("✅ Deleted", f"Employee '{name}' and their image folder have been deleted")
                 self.recognition_stats['unique_faces_today'].discard(name)
                 self.update_stats_display()
