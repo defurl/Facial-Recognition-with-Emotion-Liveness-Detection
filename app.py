@@ -64,7 +64,7 @@ from src.runtime.models_loader import load_verification_model
 from src.runtime.db import load_employee_db, build_embedding_index
 from src.runtime.settings import load_gui_threshold, save_gui_threshold
 from src.pipeline.verification import verify_embedding_fast, set_embedding_index
-from src.pipeline.processing import verify_face, resolve_raw_identity
+from src.pipeline.processing import verify_face, resolve_raw_identity, smooth_identity, update_identity_lock, update_face_lists
 from src.pipeline.liveness_adapter import LivenessAdapter
 
 # Import performance optimized classes with fallback
@@ -2565,139 +2565,69 @@ class AttendanceSystemGUI:
                                         face_history = self.get_face_recognition_history(current_face_id)
                                     else:
                                         face_history = []
-                                    
-                                    # Apply face-specific recognition smoothing
-                                    frame_identity = raw_identity
-                                    if len(face_history) >= 2:
-                                        # Face-specific smoothing with confidence weighting
-                                        identity_scores = {}
-                                        for result in face_history:
-                                            hist_id = result['identity']
-                                            hist_conf = result['confidence']
-                                            
-                                            # Weight by confidence, prefer recognized identities
-                                            weight = hist_conf / 100.0
-                                            if hist_id != "Not Registered" and "Low Confidence" not in hist_id:
-                                                weight *= 1.3  # Boost recognized identities
-                                            
-                                            if hist_id not in identity_scores:
-                                                identity_scores[hist_id] = {'weight': 0, 'count': 0}
-                                            identity_scores[hist_id]['weight'] += weight
-                                            identity_scores[hist_id]['count'] += 1
-                                        
-                                        # Choose best identity for this specific face
-                                        best_identity = None
-                                        best_score = 0
-                                        for identity, data in identity_scores.items():
-                                            avg_confidence = (data['weight'] / data['count']) * 100
-                                            # More lenient for tracked faces
-                                            if data['count'] >= 2 or avg_confidence > 75:
-                                            # More lenient for tracked faces
-                                                if data['weight'] > best_score:
-                                                    best_score = data['weight']
-                                                    best_identity = identity
-                                        
-                                        # Use tracked identity if strong enough
-                                        if best_identity and best_identity not in ["Not Registered", "Not Registered (Low Confidence)"]:
-                                            frame_identity = best_identity
-                                            print(f"[TRACKING] Face {current_face_id}: Using tracked identity '{best_identity}' (score: {best_score:.2f})")
-                                    
-                                    # Fallback to global smoothing for primary face only (backwards compatibility)
-                                    if face_idx == 0 and frame_identity == raw_identity:
-                                        self.recognition_history.append((raw_identity, confidence))
-                                        if len(self.recognition_history) > self.SMOOTHING_WINDOW:
-                                            self.recognition_history.pop(0)
+
+                                    frame_identity = smooth_identity(
+                                        raw_identity=raw_identity,
+                                        confidence=confidence,
+                                        face_history=face_history,
+                                        recognition_history=self.recognition_history,
+                                        smoothing_window=self.SMOOTHING_WINDOW,
+                                        is_primary_face=is_primary_face,
+                                    )
+                                    if frame_identity != raw_identity:
+                                        print(f"[TRACKING] Face {current_face_id}: Using tracked identity '{frame_identity}'")
                                     
                                     # ========== IDENTITY LOCK SYSTEM FOR SEAMLESS CHECK-IN ==========
                                     current_time = time.time()
-                                    # Store face-specific identity (primary face only for check-in)
-                                    if is_primary_face:  # Only primary face uses identity lock system
-                                        # Check if we have a locked identity
-                                        if self.locked_identity is not None:
-                                            # Check if lock display time has expired
-                                            if current_time - self.lock_timestamp > self.LOCK_DISPLAY_TIME:
-                                                # Auto-reset after display timeout
-                                                print("[RESET] Identity lock timeout - preparing for next person")
-                                                self.locked_identity = None
-                                                self.identity_lock_buffer = []
-                                                self.last_identity = "Not Registered"
-                                                # Reset detection state for next person
-                                                self.reset_spoof_detection("identity lock timeout")
-                                            else:
-                                                # Keep showing locked identity
-                                                self.last_identity = self.locked_identity
-                                                box_color = (0, 255, 0)
-                                        else:
-                                            # No locked identity - accumulate verifications
-                                            if raw_identity not in ["Not Registered", "Not Registered (Low Confidence)", "Processing...", "Error"]:
-                                                # Add to buffer
-                                                self.identity_lock_buffer.append((current_time, raw_identity, confidence))
-                                            else:
-                                                # No face recognized - clear buffer if it's been too long
-                                                if self.identity_lock_buffer:
-                                                    oldest_time = min(t for t, _, _ in self.identity_lock_buffer)
-                                                    if current_time - oldest_time > self.LOCK_DURATION:
-                                                        self.identity_lock_buffer = []
-                                            
-                                            # Remove old entries (older than LOCK_DURATION)
-                                            self.identity_lock_buffer = [
-                                                (t, name, conf) for t, name, conf in self.identity_lock_buffer
-                                                if current_time - t <= self.LOCK_DURATION
-                                            ]
-                                            
-                                            # Count verifications per identity
-                                            identity_counts = {}
-                                            for _, name, conf in self.identity_lock_buffer:
-                                                if name not in identity_counts:
-                                                    identity_counts[name] = []
-                                                identity_counts[name].append(conf)
-                                            
-                                            # Find most verified identity
-                                            if identity_counts:
-                                                most_verified = max(identity_counts.items(), key=lambda x: len(x[1]))
-                                                most_verified_name = most_verified[0]
-                                                verification_count = len(most_verified[1])
-                                                avg_confidence = sum(most_verified[1]) / len(most_verified[1])
-                                                
-                                                # Lock if we have enough verifications
-                                                if verification_count >= self.LOCK_MIN_VERIFICATIONS:
-                                                    self.locked_identity = most_verified_name
-                                                    self.lock_timestamp = current_time
-                                                    self.last_identity = most_verified_name
-                                                    box_color = (0, 255, 0)
-                                                    
-                                                    print(f"[LOCK] Identity locked: {most_verified_name} ({verification_count} verifications, {avg_confidence:.1f}% avg confidence)")
-                                                    
-                                                    # Update UI Log immediately (on main thread to ensure it shows)
-                                                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-                                                    log_entry = f"[{timestamp}] {most_verified_name}"
-                                                    self.log_listbox.insert(0, log_entry)
-                                                    print(f"✓ Added to check-in log: {log_entry}")
-                                                    
-                                                    # Mark attendance in background
-                                                    def mark_async():
-                                                        try:
-                                                            success, message = self.attendance_logger.mark_attendance(
-                                                                most_verified_name, min_distance, self.last_emotion, self.last_liveness
-                                                            )
-                                                            if success:
-                                                                print(f"✓ {message}")
-                                                        except Exception as e:
-                                                            print(f"Attendance marking error: {e}")
-                                                    
-                                                    threading.Thread(target=mark_async, daemon=True).start()
-                                                    self.last_attendance_message = f"Checked in: {most_verified_name}"
-                                                    
-                                                    # Spoof detection continues for next person - will reset on identity timeout
-                                                else:
-                                                    # Still accumulating - show progress
-                                                    buffer_age = current_time - min(t for t, _, _ in self.identity_lock_buffer)
-                                                    progress_pct = int((buffer_age / self.LOCK_DURATION) * 100)
-                                                    self.last_identity = f"{most_verified_name} (verifying... {verification_count}/{self.LOCK_MIN_VERIFICATIONS})"
-                                                    box_color = (255, 165, 0)  # Orange while verifying
-                                            else:
-                                                self.last_identity = "Not Registered"
-                                                box_color = (0, 0, 255)
+
+                                    def _reset_spoof(reason: str):
+                                        self.reset_spoof_detection(reason)
+
+                                    def _mark_attendance_async(name: str, avg_confidence: float):
+                                        def mark_async():
+                                            try:
+                                                success, message = self.attendance_logger.mark_attendance(
+                                                    name, min_distance, self.last_emotion, self.last_liveness
+                                                )
+                                                if success:
+                                                    print(f"✓ {message}")
+                                            except Exception as e:
+                                                print(f"Attendance marking error: {e}")
+                                        threading.Thread(target=mark_async, daemon=True).start()
+                                        self.last_attendance_message = f"Checked in: {name}"
+
+                                    def _log_checkin(name: str):
+                                        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                                        log_entry = f"[{timestamp}] {name}"
+                                        self.log_listbox.insert(0, log_entry)
+                                        print(f"✓ Added to check-in log: {log_entry}")
+
+                                    lock_state = {
+                                        "locked_identity": self.locked_identity,
+                                        "lock_timestamp": self.lock_timestamp,
+                                        "identity_lock_buffer": self.identity_lock_buffer,
+                                        "last_identity": self.last_identity,
+                                    }
+
+                                    frame_identity, box_color, last_identity_val = update_identity_lock(
+                                        is_primary_face=is_primary_face,
+                                        raw_identity=raw_identity,
+                                        confidence=confidence,
+                                        current_time=current_time,
+                                        lock_state=lock_state,
+                                        lock_duration=self.LOCK_DURATION,
+                                        lock_display_time=self.LOCK_DISPLAY_TIME,
+                                        lock_min_verifications=self.LOCK_MIN_VERIFICATIONS,
+                                        last_liveness=self.last_liveness,
+                                        on_reset_spoof=_reset_spoof,
+                                        on_mark_attendance=_mark_attendance_async,
+                                        on_log_checkin=_log_checkin,
+                                    )
+
+                                    self.locked_identity = lock_state.get("locked_identity")
+                                    self.lock_timestamp = lock_state.get("lock_timestamp", 0)
+                                    self.identity_lock_buffer = lock_state.get("identity_lock_buffer", [])
+                                    self.last_identity = last_identity_val
                                     
                                     # Store results for primary face (backwards compatibility)
                                     if face_idx == 0:
@@ -2705,52 +2635,30 @@ class AttendanceSystemGUI:
                                         self.last_distance = min_distance
                                         self.last_identity = frame_identity
 
-                                        # --- SPOOF CHECK CACHING LOGIC (Updated) ---
-                                        # Only for recognized users - add to cache when they pass liveness
                                         if (self.last_identity in employee_db and 
                                             self.last_identity not in self.session_spoof_passed and 
                                             self.last_liveness == 'Real'):
                                             self.session_spoof_passed.add(self.last_identity)
                                             print(f"[SPOOF-CACHE] Added {self.last_identity} to spoof cache")
-                                    
-                                    # Store results for this specific face
-                                    while len(self.face_identities) <= face_idx:
-                                        self.face_identities.append("Processing...")
-                                        self.face_confidences.append(0.0)
-                                        self.face_emotions.append("Unknown")
-                                        self.face_liveness.append("Unknown")
-                                    
-                                    self.face_identities[face_idx] = frame_identity
-                                    self.face_confidences[face_idx] = confidence
-                                    
-                                    # Update per-face verification tracking
-                                    if self.ENABLE_MULTI_FACE_VERIFICATION and current_face_id >= 0:
-                                        self.face_identities_verified[current_face_id] = frame_identity
-                                        self.face_confidences_verified[current_face_id] = confidence
-                                        
-                                        # Initialize verification history if needed
-                                        if current_face_id not in self.face_verification_history:
-                                            self.face_verification_history[current_face_id] = []
-                                        
-                                        # Add to verification history
-                                        self.face_verification_history[current_face_id].append({
-                                            'identity': frame_identity,
-                                            'confidence': confidence,
-                                            'timestamp': current_time
-                                        })
-                                        
-                                        # Keep only recent history
-                                        if len(self.face_verification_history[current_face_id]) > 10:
-                                            self.face_verification_history[current_face_id].pop(0)
-                                    
-                                    # Set emotion/liveness based on face type
-                                    if is_primary_face:
-                                        self.face_emotions[face_idx] = self.last_emotion
-                                        self.face_liveness[face_idx] = self.last_liveness
-                                    else:
-                                        # Secondary faces get basic status
-                                        self.face_emotions[face_idx] = "N/A"
-                                        self.face_liveness[face_idx] = "Verified" if confidence > 50 else "Unknown"
+
+                                    update_face_lists(
+                                        face_idx=face_idx,
+                                        frame_identity=frame_identity,
+                                        confidence=confidence,
+                                        is_primary_face=is_primary_face,
+                                        last_emotion=self.last_emotion,
+                                        last_liveness=self.last_liveness,
+                                        face_identities=self.face_identities,
+                                        face_confidences=self.face_confidences,
+                                        face_emotions=self.face_emotions,
+                                        face_liveness=self.face_liveness,
+                                        enable_multi_face_verification=self.ENABLE_MULTI_FACE_VERIFICATION,
+                                        current_face_id=current_face_id,
+                                        face_verification_history=self.face_verification_history,
+                                        face_identities_verified=self.face_identities_verified,
+                                        face_confidences_verified=self.face_confidences_verified,
+                                        current_time=current_time,
+                                    )
                                     
 
                                     

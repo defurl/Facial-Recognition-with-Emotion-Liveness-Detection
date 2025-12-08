@@ -130,3 +130,158 @@ def resolve_raw_identity(
         return best_match
 
     return "Not Registered"
+
+
+def update_identity_lock(
+    *,
+    is_primary_face: bool,
+    raw_identity: str,
+    confidence: float,
+    current_time: float,
+    lock_state: dict,
+    lock_duration: float,
+    lock_display_time: float,
+    lock_min_verifications: int,
+    last_liveness: str,
+    on_reset_spoof,
+    on_mark_attendance,
+    on_log_checkin,
+):
+    """Apply identity lock logic and return (frame_identity, box_color, last_identity_message).
+
+    lock_state carries: locked_identity, lock_timestamp, identity_lock_buffer, last_identity, last_attendance_message.
+    """
+    locked_identity = lock_state.get("locked_identity")
+    lock_timestamp = lock_state.get("lock_timestamp", 0)
+    identity_lock_buffer = lock_state.setdefault("identity_lock_buffer", [])
+    last_identity = lock_state.get("last_identity", "Not Registered")
+
+    if not is_primary_face:
+        return raw_identity, (0, 255, 0), last_identity
+
+    if locked_identity is not None:
+        if current_time - lock_timestamp > lock_display_time:
+            lock_state["locked_identity"] = None
+            lock_state["identity_lock_buffer"] = []
+            lock_state["last_identity"] = "Not Registered"
+            on_reset_spoof("identity lock timeout")
+            return "Not Registered", (0, 0, 255), lock_state["last_identity"]
+        return locked_identity, (0, 255, 0), locked_identity
+
+    # Immediate lock on a recognized identity (no verifying countdown)
+    if raw_identity not in ["Not Registered", "Not Registered (Low Confidence)", "Processing...", "Error"]:
+        lock_state["locked_identity"] = raw_identity
+        lock_state["lock_timestamp"] = current_time
+        lock_state["last_identity"] = raw_identity
+        on_mark_attendance(raw_identity, confidence)
+        on_log_checkin(raw_identity)
+        return raw_identity, (0, 255, 0), raw_identity
+
+    lock_state["last_identity"] = "Not Registered"
+    return "Not Registered", (0, 0, 255), lock_state["last_identity"]
+
+
+def smooth_identity(
+    *,
+    raw_identity: str,
+    confidence: float,
+    face_history: list,
+    recognition_history: list,
+    smoothing_window: int,
+    is_primary_face: bool,
+):
+    """Apply face-specific smoothing and primary-face fallback smoothing."""
+    frame_identity = raw_identity
+
+    if len(face_history) >= 2:
+        identity_scores = {}
+        for result in face_history:
+            hist_id = result.get("identity")
+            hist_conf = result.get("confidence", 0)
+            weight = hist_conf / 100.0
+            if hist_id not in ("Not Registered", "Not Registered (Low Confidence)"):
+                weight *= 1.3
+            if hist_id not in identity_scores:
+                identity_scores[hist_id] = {"weight": 0, "count": 0}
+            identity_scores[hist_id]["weight"] += weight
+            identity_scores[hist_id]["count"] += 1
+
+        best_identity = None
+        best_score = 0
+        for identity, data in identity_scores.items():
+            avg_confidence = (data["weight"] / data["count"]) * 100
+            if data["count"] >= 2 or avg_confidence > 75:
+                if data["weight"] > best_score:
+                    best_score = data["weight"]
+                    best_identity = identity
+
+        if best_identity and best_identity not in ["Not Registered", "Not Registered (Low Confidence)"]:
+            frame_identity = best_identity
+
+    if is_primary_face and frame_identity == raw_identity:
+        recognition_history.append((raw_identity, confidence))
+        if len(recognition_history) > smoothing_window:
+            recognition_history.pop(0)
+
+    return frame_identity
+
+
+def update_face_lists(
+    *,
+    face_idx: int,
+    frame_identity: str,
+    confidence: float,
+    is_primary_face: bool,
+    last_emotion: str,
+    last_liveness: str,
+    face_identities: list,
+    face_confidences: list,
+    face_emotions: list,
+    face_liveness: list,
+    enable_multi_face_verification: bool,
+    current_face_id: int,
+    face_verification_history: dict,
+    face_identities_verified: dict,
+    face_confidences_verified: dict,
+    current_time: float,
+):
+    """Ensure per-face arrays are sized and updated; track per-face history when enabled."""
+    while len(face_identities) <= face_idx:
+        face_identities.append("Processing...")
+        face_confidences.append(0.0)
+        face_emotions.append("Unknown")
+        face_liveness.append("Unknown")
+
+    face_identities[face_idx] = frame_identity
+    face_confidences[face_idx] = confidence
+
+    if is_primary_face:
+        face_emotions[face_idx] = last_emotion
+        face_liveness[face_idx] = last_liveness
+    else:
+        face_emotions[face_idx] = "N/A"
+        face_liveness[face_idx] = "Verified" if confidence > 50 else "Unknown"
+
+    if enable_multi_face_verification and current_face_id >= 0:
+        face_identities_verified[current_face_id] = frame_identity
+        face_confidences_verified[current_face_id] = confidence
+        if current_face_id not in face_verification_history:
+            face_verification_history[current_face_id] = []
+        face_verification_history[current_face_id].append({
+            "identity": frame_identity,
+            "confidence": confidence,
+            "timestamp": current_time,
+        })
+        if len(face_verification_history[current_face_id]) > 10:
+            face_verification_history[current_face_id].pop(0)
+
+
+def process_frame_shell(frame, *, detect_faces_cb, process_face_cb, update_ui_cb):
+    """Scaffold for future per-frame orchestration.
+
+    Not yet wired. Intended flow:
+    faces = detect_faces_cb(frame)
+    results = [process_face_cb(frame, face) for face in faces]
+    update_ui_cb(results)
+    """
+    raise NotImplementedError("process_frame_shell is a scaffold and not yet wired")
