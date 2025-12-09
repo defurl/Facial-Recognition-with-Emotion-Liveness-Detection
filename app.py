@@ -260,224 +260,32 @@ class AttendanceSystemGUI:
     """Modern GUI application for face recognition attendance system"""
     
     def __init__(self):
-        self.session_spoof_passed = set()  # Cache for per-session spoof checks
-        
-        # Single person verification state
-        self.single_person_mode = True  # Default to single person experience
-        self.current_verification_state = 'waiting'  # waiting, detecting, spoofing, verifying, completed
-        self.verification_locked = False  # Prevent state conflicts
-        
-        self.window = tk.Tk()
-        self.window.title("Face Recognition Attendance System - xAI Enhanced")
-
-        # Fullscreen / maximize: handle cross-platform safely
-        try:
-            import platform
-            if platform.system() == 'Windows':
-                # Maximized window on Windows
-                try:
-                    self.window.state('zoomed')
-                except Exception:
-                    pass
-            else:
-                # On many Linux window managers the '-zoomed' attribute works.
-                # Try it, but don't raise if unsupported (avoids TclError).
-                try:
-                    self.window.attributes('-zoomed', True)
-                except Exception:
-                    # Fallback: don't force maximize on unknown platforms
-                    pass
-        except Exception:
-            # Be conservative: if platform detection fails, skip maximizing
-            pass
-
-        self.window.minsize(1400, 900)
-        self.window.configure(bg='#0d1117')  # Dark theme background
-        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Enable F11 toggle fullscreen
-        self.window.bind('<F11>', lambda e: self.toggle_fullscreen())
-        self.window.bind('<Escape>', lambda e: self.window.attributes('-fullscreen', False))
-        self.fullscreen = False
+        """Initialize Attendance System GUI with all necessary components."""
+        # Initialize window
+        self._init_window()
         
         # Configure styles
         self.setup_styles()
         
-        # Core state
-        self.running = False
-        # Note: Camera I/O now managed by SessionManager
-        self.multiple_faces_warning = False
+        # Initialize state in logical sections
+        self._init_core_state()
+        self._init_processing_state()
+        self._init_face_tracking_state()
+        self._init_identity_lock_system()
+        self._init_registration_state()
+        self._init_threading_locks()
+        self._init_emotion_liveness_state()
+        self._init_spoof_detection_state()
+        self._init_display_state()
+        self._init_blink_detection_state()
+        self._init_multi_face_verification()
+        self._init_face_mesh_landmarks()
+        self._init_statistics_and_explainability()
+        self._init_performance_optimization()
+        self._init_animation_states()
         
-        # Processing control - optimized for performance
-        self.frame_count = 0
-        self.PROCESS_EVERY_N_FRAMES = max(5, PROCESS_EVERY_N_FRAMES)  # Process every 5 frames
-        self.EMOTION_EVERY_N_FRAMES = 5  # Process emotion/liveness every 5 frames
-        self.last_processed_frame = 0
-        
-        # Multi-face tracking for concurrent processing
-        self.face_identities = []  # Store identity for each processed face
-        self.face_confidences = []  # Store confidence for each processed face
-        self.face_emotions = []  # Store emotion for each processed face
-        self.face_liveness = []  # Store liveness for each processed face
-        
-        # Identity lock system for seamless check-in
-        self.identity_lock_buffer = []  # List of (timestamp, identity, confidence) tuples
-        self.LOCK_DURATION = 2.0  # Accumulate verifications for 2 seconds (real time) - reduced for faster check-in
-        self.LOCK_MIN_VERIFICATIONS = 3  # Require 3 verifications for check-in - reduced for faster response
-        self.locked_identity = None  # Currently locked identity
-        self.lock_timestamp = 0  # When the identity was locked
-        self.LOCK_DISPLAY_TIME = 2.0  # Show locked identity for 2 seconds before auto-reset
-        
-        # Phase 8: Attendance logger
-        self.attendance_logger = AttendanceLogger(
-            csv_path=OUTPUT_DIR / 'attendance_log.csv',
-            cooldown_minutes=60
-        )
-        self.last_attendance_message = ""
-        self.attendance_attempt_cache = {}  # Track last attempt time per person to prevent repeated I/O
-        
-        # Registration state tracking
-        self.registration_mode = False
-        self.registration_name = ""
-        self.registration_state = None  # Will hold state machine data during registration
-        self.registration_feedback = ""  # Persistent feedback message
-        self.registration_feedback_color = (255, 165, 0)  # Default orange
-        
-        # Thread-safe queue for frames - optimized queue size
-        self.frame_queue = queue.Queue(maxsize=1)  # Smaller queue to reduce lag
-        
-        # Thread safety locks (camera locking now handled by SessionManager)
-        self.emotion_lock = threading.Lock()
-        self.liveness_lock = threading.Lock()
-        self.liveness_state_lock = threading.RLock()  # Protect liveness state variables
-        
-        # Emotion analysis failure tracking for graceful degradation
-        self.emotion_failure_count = 0
-        self.emotion_analysis_enabled = True  # Auto-enable for lightweight liveness detection
-        
-        # Initialize missing attributes
-        self.confidence_buffer = []
-        self.no_face_frames = 0
-        # Last-known display values (prevent AttributeError when display updates run before first detection)
-        self.last_identity = "No face detected"
-        self.last_emotion = "Neutral"
-        self.last_liveness = "Unknown"
-        self.last_liveness_confidence = 0.0
-        self.last_distance = 0.0
-        self.last_confidence = 0.0
-        
-        # Recognition smoothing to reduce flickering
-        self.recognition_history = []  # Store last N recognition results
-        self.SMOOTHING_WINDOW = 7  # Increased from 3 to 7 for better stability
-        
-        # Missing attributes initialization
-        self.matched_pose_index = -1  # Initialize pose matching index
-        self.ear_canvas = None  # Will be set during UI setup
-        
-        # EAR detection optimization - Balanced thresholds for reliable blink detection
-        self.ear_threshold = 0.45  # Optimized threshold based on your data (was 0.5)
-        from collections import deque
-        self.ear_history = deque(maxlen=50)  # Store last 50 EAR values (~1.5 seconds at 30fps)
-        self.ear_lock = threading.Lock()  # Thread safety for EAR data
-        self.ear_baseline = 0.55  # Expected open-eye EAR baseline
-        self.ear_blink_sensitivity = 0.75  # Sensitivity multiplier (0.45 = 0.55 * 0.75)
-        self.current_ear = 0.0  # Current EAR value
-        self.current_blinks = 0  # Current blink count
-        
-        # Face tracking for consistent identity assignment
-        self.face_trackers = {}  # Track face positions across frames
-        self.next_face_id = 0
-        self.TRACKING_DISTANCE_THRESHOLD = 100  # Max distance to consider same face
-        self.TRACKER_TIMEOUT_FRAMES = 10  # Remove tracker after N frames without detection
-        
-        # ========== MULTI-FACE VERIFICATION SYSTEM ==========
-        # Industry Standard: Primary face gets full processing (liveness + verification)
-        #                   Secondary faces get verification only
-        # TO REVERT: Set ENABLE_MULTI_FACE_VERIFICATION = False
-        self.ENABLE_MULTI_FACE_VERIFICATION = True  # Master feature flag
-        
-        if self.ENABLE_MULTI_FACE_VERIFICATION:
-            self.primary_face_id = None  # Primary face gets full processing
-            self.face_verification_states = {}  # Per-face verification tracking
-            self.face_areas = {}  # Track face sizes for primary selection
-            self.PRIMARY_FACE_SELECTION_FRAMES = 30  # Frames to determine primary face
-            self.primary_selection_counter = 0
-            
-            # Per-face verification tracking (lightweight - only verification, not liveness)
-            self.face_identities_verified = {}  # face_id -> latest verified identity
-            self.face_confidences_verified = {}  # face_id -> latest confidence
-            self.face_verification_history = {}  # face_id -> history of verifications
-            
-            print("[MULTI-FACE] Enhanced multi-face verification enabled (Primary + Secondary)")
-        else:
-            print("[MULTI-FACE] Using legacy multi-face processing")
-        
-        # Synchronous blink detection (no threading needed)
-        self.face_mesh = face_mesh_detector  # MediaPipe Face Mesh for landmarks
-        self.current_landmarks = None  # Store landmarks for blink detection
-        
-        # Initialize lightweight blink detector and liveness system
-        self.blink_detector = BlinkDetector()
-        self.liveness_adapter = LivenessAdapter(use_blink_only=True)
-        self.verification_start_time = None
-        self.lightweight_liveness = True  # Default to lightweight mode
-        
-        # Spoof detection state tracking
-        self.last_spoof_detection_time = 0
-        self.SPOOF_WARNING_DISPLAY_TIME = 8.0  # Show spoof warning for 8 seconds (increased)
-        self.spoof_warning_shown = False  # Track if warning has been shown
-        self.last_emotion_check_frame = 0
-        
-        # Hysteresis for liveness (reduce flicker from single-frame noise)
-        self.consec_spoof_count = 0
-        self.consec_real_count = 0
-        self.CONSEC_REQUIRED = 6  # Require 6 consecutive same results before declaring spoof (increased)
-        
-        # EAR (Eye Aspect Ratio) tracking for blink detection visualization
-        from collections import deque
-        self.ear_history = deque(maxlen=150)  # Store last 150 EAR values (~5 seconds at 30fps)
-        self.ear_threshold = 0.5  # Blink detection threshold
-        self.ear_lock = threading.Lock()  # Thread safety for EAR data
-        self.ear_graph_overlay = None  # Cached graph image
-        self.ear_graph_update_counter = 0  # Update graph every N frames
-        
-        # Recognition statistics
-        self.recognition_stats = {
-            'total_detections': 0,
-            'successful_recognitions': 0,
-            'unique_faces_today': set()
-        }
-        
-        # xAI: Explainability engine
-        self.explainer = None  # Initialize after model loads
-        self.current_face_tensor = None  # Store current face for explanation
-        self.current_face_image = None  # Store current face image
-        self.current_explanation = None  # Store current explanation data
-        self.knn_neighbors = None  # Store kNN neighbor info
-        
-        # Performance optimized processing pipeline
-        self.async_processor = None  # Initialize after model loads
-        self.vectorized_knn = None  # Initialize after database loads
-        self.performance_monitor = PerformanceMonitor()
-        self.processing_batch_buffer = []
-        self.batch_processing_active = False
-
         # Per-face processor to keep GUI loop slim
         self.face_processor = FaceProcessor(self)
-        
-        # Animation states for smooth transitions
-        self.verification_animation = {
-            'active': False,
-            'type': None,  # 'success' or 'failure'
-            'frame_count': 0,
-            'max_frames': 30  # ~1 second at 30fps
-        }
-        self.box_color_transition = {
-            'current_color': (128, 128, 128),
-            'target_color': (128, 128, 128),
-            'frame': 0,
-            'transition_frames': 10
-        }
         
         # Initialize DisplayLayer (Phase 3 refactoring)
         self.display_layer = DisplayLayer(self.window)
@@ -487,6 +295,197 @@ class AttendanceSystemGUI:
         # Initialize SessionManager (Phase 3 refactoring - Stage 2)
         self.session_manager = SessionManager(self.display_layer)
         print("[STAGE2] SessionManager initialized")
+
+    def _init_window(self):
+        """Initialize main window with cross-platform fullscreen handling."""
+        self.window = tk.Tk()
+        self.window.title("Face Recognition Attendance System - xAI Enhanced")
+        
+        # Fullscreen / maximize: handle cross-platform safely
+        try:
+            import platform
+            if platform.system() == 'Windows':
+                try:
+                    self.window.state('zoomed')
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.window.attributes('-zoomed', True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        self.window.minsize(1400, 900)
+        self.window.configure(bg='#0d1117')  # Dark theme background
+        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Enable F11 toggle fullscreen
+        self.window.bind('<F11>', lambda e: self.toggle_fullscreen())
+        self.window.bind('<Escape>', lambda e: self.window.attributes('-fullscreen', False))
+        self.fullscreen = False
+    
+    def _init_core_state(self):
+        """Initialize core application state variables."""
+        self.running = False
+        self.multiple_faces_warning = False
+        self.single_person_mode = True
+        self.current_verification_state = 'waiting'
+        self.verification_locked = False
+        self.session_spoof_passed = set()
+    
+    def _init_processing_state(self):
+        """Initialize frame processing and performance variables."""
+        self.frame_count = 0
+        self.PROCESS_EVERY_N_FRAMES = max(5, PROCESS_EVERY_N_FRAMES)
+        self.EMOTION_EVERY_N_FRAMES = 5
+        self.last_processed_frame = 0
+        self.last_emotion_check_frame = 0
+        self.frame_queue = queue.Queue(maxsize=1)
+    
+    def _init_face_tracking_state(self):
+        """Initialize multi-face tracking and identity management."""
+        self.face_identities = []
+        self.face_confidences = []
+        self.face_emotions = []
+        self.face_liveness = []
+        self.face_trackers = {}
+        self.next_face_id = 0
+        self.TRACKING_DISTANCE_THRESHOLD = 100
+        self.TRACKER_TIMEOUT_FRAMES = 10
+        self.matched_pose_index = -1
+    
+    def _init_identity_lock_system(self):
+        """Initialize identity lock system for seamless check-in."""
+        self.identity_lock_buffer = []
+        self.LOCK_DURATION = 2.0
+        self.LOCK_MIN_VERIFICATIONS = 3
+        self.locked_identity = None
+        self.lock_timestamp = 0
+        self.LOCK_DISPLAY_TIME = 2.0
+        self.recognition_history = []
+        self.SMOOTHING_WINDOW = 7
+    
+    def _init_registration_state(self):
+        """Initialize registration mode and state tracking."""
+        self.registration_mode = False
+        self.registration_name = ""
+        self.registration_state = None
+        self.registration_feedback = ""
+        self.registration_feedback_color = (255, 165, 0)
+        self.attendance_logger = AttendanceLogger(
+            csv_path=OUTPUT_DIR / 'attendance_log.csv',
+            cooldown_minutes=60
+        )
+        self.last_attendance_message = ""
+        self.attendance_attempt_cache = {}
+    
+    def _init_threading_locks(self):
+        """Initialize thread safety locks."""
+        self.emotion_lock = threading.Lock()
+        self.liveness_lock = threading.Lock()
+        self.liveness_state_lock = threading.RLock()
+        self.ear_lock = threading.Lock()
+    
+    def _init_emotion_liveness_state(self):
+        """Initialize emotion and liveness detection state."""
+        self.emotion_failure_count = 0
+        self.emotion_analysis_enabled = True
+        self.blink_detector = BlinkDetector()
+        self.liveness_adapter = LivenessAdapter(use_blink_only=True)
+        self.verification_start_time = None
+        self.lightweight_liveness = True
+    
+    def _init_spoof_detection_state(self):
+        """Initialize spoof detection and liveness verification state."""
+        self.last_spoof_detection_time = 0
+        self.SPOOF_WARNING_DISPLAY_TIME = 8.0
+        self.spoof_warning_shown = False
+        self.consec_spoof_count = 0
+        self.consec_real_count = 0
+        self.CONSEC_REQUIRED = 6
+    
+    def _init_display_state(self):
+        """Initialize display and UI rendering state."""
+        self.confidence_buffer = []
+        self.no_face_frames = 0
+        self.last_identity = "No face detected"
+        self.last_emotion = "Neutral"
+        self.last_liveness = "Unknown"
+        self.last_liveness_confidence = 0.0
+        self.last_distance = 0.0
+        self.last_confidence = 0.0
+        self.ear_canvas = None
+    
+    def _init_blink_detection_state(self):
+        """Initialize blink detection and EAR tracking."""
+        self.ear_threshold = 0.45
+        from collections import deque
+        self.ear_history = deque(maxlen=50)
+        self.ear_baseline = 0.55
+        self.ear_blink_sensitivity = 0.75
+        self.current_ear = 0.0
+        self.current_blinks = 0
+        self.ear_graph_overlay = None
+        self.ear_graph_update_counter = 0
+    
+    def _init_multi_face_verification(self):
+        """Initialize multi-face verification system."""
+        self.ENABLE_MULTI_FACE_VERIFICATION = True
+        if self.ENABLE_MULTI_FACE_VERIFICATION:
+            self.primary_face_id = None
+            self.face_verification_states = {}
+            self.face_areas = {}
+            self.PRIMARY_FACE_SELECTION_FRAMES = 30
+            self.primary_selection_counter = 0
+            self.face_identities_verified = {}
+            self.face_confidences_verified = {}
+            self.face_verification_history = {}
+            print("[MULTI-FACE] Enhanced multi-face verification enabled (Primary + Secondary)")
+        else:
+            print("[MULTI-FACE] Using legacy multi-face processing")
+    
+    def _init_face_mesh_landmarks(self):
+        """Initialize face mesh for landmark detection."""
+        self.face_mesh = face_mesh_detector
+        self.current_landmarks = None
+    
+    def _init_statistics_and_explainability(self):
+        """Initialize recognition statistics and explainability engine."""
+        self.recognition_stats = {
+            'total_detections': 0,
+            'successful_recognitions': 0,
+            'unique_faces_today': set()
+        }
+        self.explainer = None
+        self.current_face_tensor = None
+        self.current_face_image = None
+        self.current_explanation = None
+        self.knn_neighbors = None
+    
+    def _init_performance_optimization(self):
+        """Initialize performance-optimized processing components."""
+        self.async_processor = None
+        self.vectorized_knn = None
+        self.performance_monitor = PerformanceMonitor()
+        self.processing_batch_buffer = []
+        self.batch_processing_active = False
+    
+    def _init_animation_states(self):
+        """Initialize animation and color transition states."""
+        self.verification_animation = {
+            'active': False,
+            'type': None,
+            'frame_count': 0,
+            'max_frames': 30
+        }
+        self.box_color_transition = {
+            'current_color': (128, 128, 128),
+            'target_color': (128, 128, 128),
+            'frame': 0,
+            'transition_frames': 10
+        }
 
     def update_face_tracking(self, face_positions):
         """Update face tracking to maintain consistent IDs across frames."""
@@ -682,11 +681,17 @@ class AttendanceSystemGUI:
         self.style = ttk.Style()
         self.style.theme_use('clam')
         
-        # Dark theme color palette (GitHub Dark inspired)
-        # Background: #0d1117, Surface: #161b22, Primary: #58a6ff, Success: #3fb950
-        # Warning: #d29922, Danger: #f85149, Text: #c9d1d9
+        # Configure label styles
+        self._setup_label_styles()
         
-        # Configure custom styles for dark theme
+        # Configure button styles
+        self._setup_button_styles()
+        
+        # Configure frame styles
+        self._setup_frame_styles()
+    
+    def _setup_label_styles(self):
+        """Configure TTK label styles for dark theme."""
         self.style.configure('Title.TLabel', font=('Arial', 20, 'bold'), foreground='#58a6ff', background='#0d1117')
         self.style.configure('Header.TLabel', font=('Arial', 13, 'bold'), foreground='#c9d1d9', background='#0d1117')
         self.style.configure('Status.TLabel', font=('Arial', 11), foreground='#8b949e', background='#161b22')
@@ -694,8 +699,10 @@ class AttendanceSystemGUI:
         self.style.configure('Info.TLabel', font=('Arial', 9), foreground='#8b949e', background='#161b22')
         self.style.configure('Success.TLabel', font=('Arial', 11, 'bold'), foreground='#3fb950', background='#161b22')
         self.style.configure('Warning.TLabel', font=('Arial', 11, 'bold'), foreground='#d29922', background='#161b22')
-        
-        # Dark theme button styles with high contrast
+    
+    def _setup_button_styles(self):
+        """Configure TTK button styles for dark theme."""
+        # Primary button
         self.style.configure('Primary.TButton', 
                            font=('Arial', 10, 'bold'),
                            background='#58a6ff',
@@ -706,6 +713,7 @@ class AttendanceSystemGUI:
         self.style.map('Primary.TButton',
                       background=[('active', '#79c0ff'), ('pressed', '#388bfd')])
         
+        # Success button
         self.style.configure('Success.TButton', 
                            font=('Arial', 10, 'bold'),
                            background='#3fb950',
@@ -716,6 +724,7 @@ class AttendanceSystemGUI:
         self.style.map('Success.TButton',
                       background=[('active', '#56d364'), ('pressed', '#2ea043')])
         
+        # Warning button
         self.style.configure('Warning.TButton', 
                            font=('Arial', 10, 'bold'),
                            background='#d29922',
@@ -726,6 +735,7 @@ class AttendanceSystemGUI:
         self.style.map('Warning.TButton',
                       background=[('active', '#e2b340'), ('pressed', '#bb8009')])
         
+        # Danger button
         self.style.configure('Danger.TButton', 
                            font=('Arial', 10, 'bold'),
                            background='#f85149',
@@ -736,7 +746,7 @@ class AttendanceSystemGUI:
         self.style.map('Danger.TButton',
                       background=[('active', '#ff7b72'), ('pressed', '#da3633')])
         
-        # xAI button style for explanation features
+        # XAI button
         self.style.configure('XAI.TButton', 
                            font=('Arial', 10, 'bold'),
                            background='#a371f7',
@@ -747,7 +757,7 @@ class AttendanceSystemGUI:
         self.style.map('XAI.TButton',
                       background=[('active', '#b583f8'), ('pressed', '#8957e5')])
         
-        # Disabled button state - dark gray that stands out
+        # Disabled button states
         self.style.map('TButton',
                       background=[('disabled', '#95a5a6')],
                       foreground=[('disabled', '#555555')])
@@ -757,8 +767,9 @@ class AttendanceSystemGUI:
         self.style.map('Success.TButton',
                       background=[('disabled', '#7f8c8d')],
                       foreground=[('disabled', '#34495e')])
-        
-        # LabelFrame styles for dark theme
+    
+    def _setup_frame_styles(self):
+        """Configure TTK frame (LabelFrame) styles for dark theme."""
         self.style.configure('TLabelframe', background='#161b22', borderwidth=1, relief='solid')
         self.style.configure('TLabelframe.Label', 
                            font=('Arial', 11, 'bold'), 
@@ -767,13 +778,25 @@ class AttendanceSystemGUI:
     
     def setup_ui(self):
         """Setup simplified user-facing UI"""
-        # Main container with dark theme
         main_container = tk.Frame(self.window, bg='#0d1117')
         main_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        # 4. Right Panel: Checked-in Identities (New Requirement)
-        # Pack RIGHT first so it claims the right side
-        right_panel = tk.Frame(main_container, bg='#0d1117', width=300)
+        # Setup right panel (logs, debug, CRUD)
+        self._setup_right_panel(main_container)
+        
+        # Setup left container (video feed + controls)
+        left_container = tk.Frame(main_container, bg='#0d1117')
+        left_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self._setup_video_feed(left_container)
+        self._setup_controls(left_container)
+        
+        # Initialize hidden components
+        self._setup_hidden_components()
+    
+    def _setup_right_panel(self, parent):
+        """Setup right panel with logs, blink debug, and CRUD operations."""
+        right_panel = tk.Frame(parent, bg='#0d1117', width=300)
         right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
         right_panel.pack_propagate(False)
         
@@ -787,9 +810,13 @@ class AttendanceSystemGUI:
         self.log_listbox = tk.Listbox(right_panel, bg='#161b22', fg='#c9d1d9', 
                                      font=('Arial', 10), borderwidth=0, highlightthickness=0)
         self.log_listbox.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        # EAR Debug Panel with Canvas for Real-time Graph
-        ear_debug_frame = ttk.LabelFrame(right_panel, text="BLINK DETECTION DEBUG")
+        
+        self._setup_blink_debug_panel(right_panel)
+        self._setup_crud_buttons(right_panel)
+    
+    def _setup_blink_debug_panel(self, parent):
+        """Setup blink detection debug panel with EAR visualization."""
+        ear_debug_frame = ttk.LabelFrame(parent, text="BLINK DETECTION DEBUG")
         ear_debug_frame.pack(fill=tk.X, pady=(0, 10))
         
         ear_container = tk.Frame(ear_debug_frame, bg='#161b22', height=120)
@@ -801,7 +828,7 @@ class AttendanceSystemGUI:
                                    highlightthickness=1, highlightbackground='#444c56')
         self.ear_canvas.pack(fill=tk.X, pady=(0, 5))
         
-        # Simple text-based debug for additional info
+        # Debug text area
         self.ear_debug_text = tk.Text(ear_container, bg='#0d0d0d', fg='#c9d1d9', 
                                      height=2, font=('Arial', 8), wrap=tk.WORD,
                                      highlightthickness=1, highlightbackground='#444c56')
@@ -818,26 +845,23 @@ class AttendanceSystemGUI:
         self.blink_count_label = tk.Label(ear_status_frame, text="Blinks: 0", 
                                          bg='#161b22', fg='#c9d1d9', font=('Arial', 8))
         self.blink_count_label.pack(side=tk.RIGHT)
-
-        # 5. Employee Management (CRUD) - Bottom of Right Panel
-        crud_frame = ttk.LabelFrame(right_panel, text="EMPLOYEE MANAGEMENT")
+    
+    def _setup_crud_buttons(self, parent):
+        """Setup employee management (CRUD) buttons."""
+        crud_frame = ttk.LabelFrame(parent, text="EMPLOYEE MANAGEMENT")
         crud_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(0, 0))
         
         crud_container = tk.Frame(crud_frame, bg='#161b22')
         crud_container.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Button(crud_container, text="View Employees", command=self.view_employees).pack(fill=tk.X, pady=(0, 5))
-        # ttk.Button(crud_container, text="View Attendance", command=self.view_attendance).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(crud_container, text="Edit Employee", command=self.edit_employee).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(crud_container, text="Delete Employee", command=self.delete_employee, style='Danger.TButton').pack(fill=tk.X, pady=(0, 5))
         ttk.Button(crud_container, text="Debug Analysis", command=self.run_debug_analysis, style='Warning.TButton').pack(fill=tk.X)
-
-        # Left Container for Video and Controls
-        left_container = tk.Frame(main_container, bg='#0d1117')
-        left_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # 1. Video Feed (Top/Center)
-        video_frame = ttk.LabelFrame(left_container, text="LIVE CAMERA FEED")
+    
+    def _setup_video_feed(self, parent):
+        """Setup live video feed display."""
+        video_frame = ttk.LabelFrame(parent, text="LIVE CAMERA FEED")
         video_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
         # Video container
@@ -853,9 +877,10 @@ class AttendanceSystemGUI:
         # Store video display dimensions
         self.video_width = 640
         self.video_height = 480
-        
-        # 2. Controls (Below Video)
-        controls_frame = ttk.LabelFrame(left_container, text="CONTROLS")
+    
+    def _setup_controls(self, parent):
+        """Setup control buttons and toggles."""
+        controls_frame = ttk.LabelFrame(parent, text="CONTROLS")
         controls_frame.pack(fill=tk.X, pady=(0, 10))
         
         control_buttons_frame = tk.Frame(controls_frame, bg='#161b22')
@@ -885,16 +910,11 @@ class AttendanceSystemGUI:
                                            command=self.clear_cache_button_clicked, state=tk.DISABLED, style='Warning.TButton', width=20)
         self.clear_cache_button.pack(side=tk.LEFT, padx=10)
         
-        # Commented out blink detection button
-        # self.blink_button = ttk.Button(button_container, text="ENABLE BLINK DETECTION", 
-        #                              command=self.enable_blink_detection, state=tk.DISABLED, width=20)
-        # self.blink_button.pack(side=tk.LEFT, padx=10)
-
         # Lightweight detection toggle
         toggle_frame = tk.Frame(controls_frame, bg='#f0f0f0')
         toggle_frame.pack(fill=tk.X, pady=5)
         
-        self.lightweight_var = tk.BooleanVar(value=True)  # Default to lightweight
+        self.lightweight_var = tk.BooleanVar(value=True)
         self.lightweight_checkbox = ttk.Checkbutton(
             toggle_frame, 
             text="⚡ Lightweight Liveness (Blink-only, 30+ FPS)", 
@@ -913,9 +933,6 @@ class AttendanceSystemGUI:
         )
         self.detection_mode_label.pack(side=tk.LEFT, padx=10)
 
-        # 3. Hidden components (to prevent logic errors in existing update methods)
-        # These are created but NOT packed into the visible UI
-        self._setup_hidden_components()
 
     def _setup_hidden_components(self):
         """Initialize UI components that are referenced in logic but hidden in this view"""
@@ -1814,6 +1831,191 @@ class AttendanceSystemGUI:
             print(f"[RESET] Error resetting system: {e}")
             messagebox.showerror("Reset Error", f"Failed to reset system: {e}")
     
+    def _process_registration_frame(self, frame, state, val_transform, verification_model):
+        """Process a single frame during registration mode."""
+        current_step = state['step']
+        
+        if current_step >= len(state['poses_required']):
+            if not state.get('completing', False):
+                state['completing'] = True
+                self.window.after(100, self.complete_registration)
+            return None  # Don't process further
+        
+        # Draw registration overlay
+        h, w = frame.shape[:2]
+        instruction_text = state['instructions'][current_step]
+        frame = draw_registration_overlay(
+            frame,
+            instruction_text=instruction_text,
+            current_step=current_step,
+            total_steps=len(state['poses_required']),
+            feedback_text=getattr(self, "registration_feedback", ""),
+            feedback_color=getattr(self, "registration_feedback_color", (255, 165, 0)),
+        )
+        
+        # Check pose every 30 frames
+        if self.frame_count - state['last_check_frame'] >= 30:
+            state['last_check_frame'] = self.frame_count
+            self._check_registration_quality(frame, state, val_transform, verification_model)
+        
+        return frame
+    
+    def _check_registration_quality(self, frame, state, val_transform, verification_model):
+        """Check quality of face during registration and capture if acceptable."""
+        faces = detect_faces(frame)
+        if len(faces) == 0:
+            self.registration_feedback = "No face detected"
+            self.registration_feedback_color = (231, 76, 60)
+            state['hold_frames'] = 0
+            return
+        
+        x, y, w, h = faces[0]
+        cropped_face = crop_face_with_padding(frame, x, y, w, h)
+        
+        if cropped_face.size == 0 or cropped_face.shape[0] < 50:
+            self.registration_feedback = "Face too small"
+            self.registration_feedback_color = (231, 76, 60)
+            state['hold_frames'] = 0
+            return
+        
+        # Quality checks
+        try:
+            from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
+            
+            blur_var, blur_ok, _ = check_image_blur(cropped_face, threshold=50)
+            brightness, contrast, lighting_ok, _ = check_image_lighting(cropped_face, 30, 220, 35)
+            
+            face_size = min(cropped_face.shape[0], cropped_face.shape[1])
+            optimal_size = face_size >= 150
+            
+            target_pose = state['poses_required'][state['step']]
+            yaw, pitch, roll, _, _, _ = estimate_head_pose_angles(cropped_face)
+            pose_ok, _, pose_feedback = validate_pose_for_target(yaw, pitch, target_pose, is_strict=False)
+        except Exception as e:
+            print(f"Warning: Quality check error: {e}")
+            blur_ok, lighting_ok, pose_ok = True, True, True
+            pose_feedback = "Processing..."
+        
+        # Handle quality feedback and capture
+        if blur_ok and lighting_ok and pose_ok and optimal_size:
+            state['hold_frames'] += 1
+            remaining = 3 - state['hold_frames']
+            
+            if remaining > 0:
+                self.registration_feedback = f"Perfect! Hold steady... {remaining}"
+                self.registration_feedback_color = (0, 255, 0)
+            else:
+                self._capture_registration_pose(cropped_face, state, val_transform, verification_model)
+        else:
+            state['hold_frames'] = 0
+            
+            if not optimal_size:
+                self.registration_feedback = "Move closer - face should be larger in frame"
+                self.registration_feedback_color = (255, 165, 0)
+            elif not pose_ok:
+                self.registration_feedback = f"Adjust Pose: {pose_feedback}"
+                self.registration_feedback_color = (255, 165, 0)
+            elif not blur_ok:
+                self.registration_feedback = f"Too blurry ({blur_var:.1f}) - hold still"
+                self.registration_feedback_color = (255, 165, 0)
+            elif not lighting_ok:
+                self.registration_feedback = f"Adjust lighting (brightness: {brightness:.0f})"
+                self.registration_feedback_color = (255, 165, 0)
+    
+    def _capture_registration_pose(self, cropped_face, state, val_transform, verification_model):
+        """Capture an embedding for a registration pose."""
+        self.registration_feedback = "Captured!"
+        self.registration_feedback_color = (0, 255, 0)
+        
+        try:
+            cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
+            rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb).convert('RGB')
+            image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
+            
+            with torch.no_grad():
+                embedding = verification_model(image_tensor, mode='metric')
+            
+            state['frames'].append(cropped_face_resized.copy())
+            state['embeddings'].append(embedding.cpu())
+            state['step'] += 1
+            state['hold_frames'] = 0
+            
+            if state['step'] < len(state['poses_required']):
+                self.status_text.set(f"🔵 Step {state['step'] + 1}/{len(state['poses_required'])}")
+        except Exception as e:
+            print(f"Capture error: {e}")
+    
+    def _process_face_detection(self, frame):
+        """Detect and track faces in the frame."""
+        detect_start = time.time()
+        faces = detect_faces(frame)
+        detect_time = (time.time() - detect_start) * 1000
+        
+        face_assignments = self.update_face_tracking(faces)
+        
+        if self.frame_count % 30 == 0:
+            print(f"[FACE] Detection: {detect_time:.2f}ms | Faces: {len(faces)} | Tracked: {len(self.face_trackers)}")
+        
+        return faces, face_assignments, detect_time
+    
+    def _process_faces_for_verification(self, frame, faces, face_assignments, verification_model, val_transform, employee_db):
+        """Process detected faces for identity verification."""
+        h, w = frame.shape[:2]
+        self.multiple_faces_warning = len(faces) > MAX_CONCURRENT_FACES
+        faces_to_process = faces[:MAX_CONCURRENT_FACES]
+        
+        # Select primary face for intensive processing
+        if self.ENABLE_MULTI_FACE_VERIFICATION and len(faces) > 0:
+            try:
+                selected_primary_id = self.select_primary_face(faces, face_assignments)
+                if self.frame_count % 30 == 0 and selected_primary_id != self.primary_face_id:
+                    print(f"[PRIMARY] Selected face ID {selected_primary_id} as primary")
+                self.primary_face_id = selected_primary_id
+            except Exception as e:
+                print(f"[PRIMARY] Error in face selection: {e}")
+                self.primary_face_id = face_assignments.get(0, 0) if faces else None
+        
+        # Process each detected face
+        for face_idx, (x, y, w, h) in enumerate(faces_to_process):
+            self.face_processor.process_face(
+                frame,
+                face_idx,
+                (x, y, w, h),
+                faces,
+                faces_to_process,
+                face_assignments,
+                verification_model,
+                val_transform,
+                employee_db,
+            )
+        
+        return frame, len(faces_to_process)
+    
+    def _draw_frame_status_indicators(self, frame, num_faces):
+        """Draw status indicators on frame (confidence buffer, multi-face warnings, etc)."""
+        if not self.registration_mode:
+            if len(self.confidence_buffer) > 0:
+                buffer_size = len(self.confidence_buffer)
+                progress_pct = min(100, int((buffer_size / 20) * 100))
+                status_text = f"Analyzing: {progress_pct}%"
+                frame = draw_status_chip(frame, status_text, (255, 193, 7), progress_pct=progress_pct)
+        
+        # Display warning or info banner
+        if num_faces > MAX_CONCURRENT_FACES:
+            warning_text = f"⚠ {num_faces} faces detected - processing {MAX_CONCURRENT_FACES} max"
+            frame = draw_banner(frame, warning_text, (255, 165, 0), alpha=0.88, radius=10)
+        elif num_faces > 1:
+            if self.ENABLE_MULTI_FACE_VERIFICATION:
+                verified_people = list(self.face_identities_verified.values())
+                recognized_count = len([p for p in verified_people if "Not Registered" not in p])
+                info_text = f"✓ {num_faces} faces: 1 PRIMARY + {num_faces-1} SEC | {recognized_count} recognized"
+            else:
+                info_text = f"✓ Processing {num_faces} faces simultaneously"
+            frame = draw_banner(frame, info_text, (0, 255, 0), alpha=0.85, radius=8)
+        
+        return frame
+    
     def capture_frames(self):
         """Optimized frame capture with async processing pipeline"""
         # Initialize async event loop for this thread
@@ -1826,15 +2028,12 @@ class AttendanceSystemGUI:
                 frame_data = self.session_manager.capture_next_frame()
                 
                 if frame_data is None:
-                    # No frame available, sleep briefly and continue
                     time.sleep(0.01)
                     continue
                 
                 frame, timestamp = frame_data
                 
-                # Reset error counter on successful read
-                # Debug: Log successful frame capture periodically
-                if self.frame_count % 300 == 0:  # Every 10 seconds at 30fps
+                if self.frame_count % 300 == 0:
                     print(f"[DEBUG] Frame capture OK: {frame.shape}, frame #{self.frame_count}")
                 
             except Exception as e:
@@ -1844,8 +2043,6 @@ class AttendanceSystemGUI:
             
             frame = cv2.flip(frame, 1)
             self.frame_count += 1
-            
-            # Performance timing start
             self.process_start = time.time()
             
             # Clear previous frame's face data
@@ -1855,238 +2052,62 @@ class AttendanceSystemGUI:
                 self.face_emotions.clear()
                 self.face_liveness.clear()
             
+            # Handle registration mode
             if self.registration_mode and self.registration_state:
-                state = self.registration_state
-                current_step = state['step']
-                
-                if current_step >= len(state['poses_required']):
-                    # All poses captured, complete registration (once only)
-                    if not state.get('completing', False):
-                        state['completing'] = True
-                        self.window.after(100, self.complete_registration)
-                    # Don't process any more frames during completion
+                frame = self._process_registration_frame(
+                    frame, 
+                    self.registration_state, 
+                    val_transform, 
+                    verification_model
+                )
+                if frame is None:
                     continue
+            else:
+                # Normal verification mode
+                process_start = time.time()
                 
-                # Clean, centered registration overlay above camera feed
-                h, w = frame.shape[:2]
-                instruction_text = state['instructions'][current_step]
-                frame = draw_registration_overlay(
-                    frame,
-                    instruction_text=instruction_text,
-                    current_step=current_step,
-                    total_steps=len(state['poses_required']),
-                    feedback_text=getattr(self, "registration_feedback", ""),
-                    feedback_color=getattr(self, "registration_feedback_color", (255, 165, 0)),
-                )
+                # Use optimized async processor if available
+                if self.async_processor is not None:
+                    try:
+                        results = loop.run_until_complete(
+                            self.async_processor.process_frame_async(frame)
+                        )
+                        # Process async results (existing logic)
+                    except Exception as e:
+                        print(f"[ASYNC] Error in async processing: {e}")
+                        pass
                 
-                # Check every 30 frames (~1 second at 30fps) to reduce processing load and flickering
-                if self.frame_count - state['last_check_frame'] >= 30:
-                    state['last_check_frame'] = self.frame_count
-                    
-                    faces = detect_faces(frame)
-                    if len(faces) == 0:
-                        self.registration_feedback = "No face detected"
-                        self.registration_feedback_color = (231, 76, 60)
-                        state['hold_frames'] = 0
-                    else:
-                        x, y, w, h = faces[0]
-                        cropped_face = crop_face_with_padding(frame, x, y, w, h)
-                        
-                        if cropped_face.size == 0 or cropped_face.shape[0] < 50:
-                            self.registration_feedback = "Face too small"
-                            self.registration_feedback_color = (231, 76, 60)
-                            state['hold_frames'] = 0
-                        else:
-                            # Import quality check functions safely
-                            try:
-                                from utils import check_image_blur, check_image_lighting, estimate_head_pose_angles, validate_pose_for_target
-                                
-                                # ENHANCED: Quality checks optimized for closer distance
-                                blur_var, blur_ok, blur_msg = check_image_blur(cropped_face, threshold=50)  # Slightly higher blur threshold
-                                brightness, contrast, lighting_ok, lighting_msg = check_image_lighting(cropped_face, 30, 220, 35)  # Tighter lighting control
-                                
-                                # Face size guidance for optimal distance
-                                face_size = min(cropped_face.shape[0], cropped_face.shape[1])
-                                optimal_size = face_size >= 150  # Encourage larger faces
-                                size_feedback = "" if optimal_size else " (Move closer for better quality)"
-                                
-                                # Pose validation
-                                target_pose = state['poses_required'][state['step']]
-                                yaw, pitch, roll, _, _, _ = estimate_head_pose_angles(cropped_face)
-                                pose_ok, _, pose_feedback = validate_pose_for_target(yaw, pitch, target_pose, is_strict=False)
-                            except Exception as util_e:
-                                print(f"Warning: Quality check error: {util_e}")
-                                # Default to accepting the frame if utils fail
-                                blur_ok, lighting_ok, pose_ok = True, True, True
-                                pose_feedback = "Processing..."
-                            
-                            if blur_ok and lighting_ok and pose_ok and optimal_size:
-                                state['hold_frames'] += 1
-                                remaining = 3 - state['hold_frames']
-                                
-                                if remaining > 0:
-                                    self.registration_feedback = f"Perfect! Hold steady... {remaining}{size_feedback}"
-                                    self.registration_feedback_color = (0, 255, 0)
-                                else:
-                                    # Capture this pose
-                                    self.registration_feedback = "Captured!"
-                                    self.registration_feedback_color = (0, 255, 0)
-                                    
-                                    try:
-                                        cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
-                                        rgb = cv2.cvtColor(cropped_face_resized, cv2.COLOR_BGR2RGB)
-                                        pil_image = Image.fromarray(rgb).convert('RGB')
-                                        image_tensor = val_transform(pil_image).unsqueeze(0).to(DEVICE)
-                                        
-                                        with torch.no_grad():
-                                            embedding = verification_model(image_tensor, mode='metric')
-                                        
-                                        state['frames'].append(cropped_face_resized.copy())
-                                        state['embeddings'].append(embedding.cpu())
-                                        state['step'] += 1
-                                        state['hold_frames'] = 0
-                                        
-                                        if state['step'] < len(state['poses_required']):
-                                            self.status_text.set(f"🔵 Step {state['step'] + 1}/{len(state['poses_required'])}: {state['instructions'][state['step']]}")
-                                    except Exception as e:
-                                        print(f"Capture error: {e}")
-                                        draw_banner(frame, f"Error: {str(e)[:30]}", (255, 0, 0), alpha=0.9, radius=6)
-                            else:
-                                state['hold_frames'] = 0
-                                
-                                if not optimal_size:
-                                    self.registration_feedback = "Move closer - face should be larger in frame"
-                                    self.registration_feedback_color = (255, 165, 0)
-                                elif not pose_ok:
-                                    self.registration_feedback = f"Adjust Pose: {pose_feedback}"
-                                    self.registration_feedback_color = (255, 165, 0)
-                                elif not blur_ok:
-                                    self.registration_feedback = f"Too blurry ({blur_var:.1f}) - hold still"
-                                    self.registration_feedback_color = (255, 165, 0)
-                                elif not lighting_ok:
-                                    self.registration_feedback = f"Adjust lighting (brightness: {brightness:.0f}, contrast: {contrast:.0f})"
-                                    self.registration_feedback_color = (255, 165, 0)
-                else:
-                    # Initialize feedback if not set
-                    if not hasattr(self, 'registration_feedback'):
-                        self.registration_feedback = ""            # ========== OPTIMIZED ASYNC PROCESSING ==========
-            process_start = time.time()
-            
-            # Use optimized async processor if available
-            if self.async_processor is not None:
-                try:
-                    # Run async processing in the loop
-                    results = loop.run_until_complete(
-                        self.async_processor.process_frame_async(frame)
+                # Legacy fallback processing
+                faces, face_assignments, _ = self._process_face_detection(frame)
+                
+                if faces:
+                    frame, num_faces = self._process_faces_for_verification(
+                        frame, 
+                        faces, 
+                        face_assignments, 
+                        verification_model, 
+                        val_transform, 
+                        employee_db
                     )
-                    
-                    # Process results efficiently
-                    if results:
-                        processed_frame = self.process_async_results(results, frame)
-                        self.queue_frame_for_display(processed_frame)
-                    
-                    process_time = (time.time() - process_start) * 1000
-                    self.performance_monitor.log_timing('total', process_time)
-                    
-                    if self.frame_count % 30 == 0:
-                        stats = self.performance_monitor.get_stats()
-                        print(f"[PERFORMANCE] Async processing: {process_time:.1f}ms | FPS: {stats['total']['fps']:.1f}")
-                    
-                    continue  # Skip legacy processing
-                except Exception as e:
-                    print(f"[ASYNC ERROR] Falling back to legacy processing: {e}")
-            
-            # ========== LEGACY PROCESSING (Fallback) ==========
-            detect_start = time.time()
-            faces = detect_faces(frame)
-            detect_time = (time.time() - detect_start) * 1000
-            
-            # Update face tracking for consistent identity assignment
-            face_assignments = self.update_face_tracking(faces)
-            
-            if self.frame_count % 30 == 0:
-                print(f"[LEGACY] Face Detection: {detect_time:.2f}ms | Faces: {len(faces)} | Tracked: {len(self.face_trackers)}")
-            
-            h, w = frame.shape[:2]
-            self.multiple_faces_warning = len(faces) > MAX_CONCURRENT_FACES
-            faces_to_process = faces[:MAX_CONCURRENT_FACES]
-            
-            # Multi-face verification: Select primary face for intensive processing
-            if self.ENABLE_MULTI_FACE_VERIFICATION and len(faces) > 0:
-                try:
-                    selected_primary_id = self.select_primary_face(faces, face_assignments)
-                    if self.frame_count % 30 == 0 and selected_primary_id != self.primary_face_id:
-                        print(f"[PRIMARY] Selected face ID {selected_primary_id} as primary (from {len(faces)} faces)")
-                    self.primary_face_id = selected_primary_id
-                except Exception as e:
-                    print(f"[PRIMARY] Error in face selection, falling back to face 0: {e}")
-                    self.primary_face_id = face_assignments.get(0, 0) if faces else None
-            
-            # Debug: Log multi-face processing when multiple faces detected
-            if len(faces) > 1 and self.frame_count % 30 == 0:
-                print(f"[MULTI-FACE] Processing {len(faces_to_process)} out of {len(faces)} detected faces")
-                for i, (fx, fy, fw, fh) in enumerate(faces):
-                    face_id = face_assignments.get(i, -1)
-                    print(f"  Face {i} (ID:{face_id}): bbox=({fx}, {fy}, {fw}, {fh}) center=({fx + fw//2}, {fy + fh//2}) area={fw*fh}")
-            elif len(faces) == 0 and self.frame_count % 60 == 0:  # Less frequent for no faces
-                print(f"[FACE-DETECT] No faces detected at frame {self.frame_count}")
-
-            for face_idx, (x, y, w, h) in enumerate(faces_to_process):
-                self.face_processor.process_face(
-                    frame,
-                    face_idx,
-                    (x, y, w, h),
-                    faces,
-                    faces_to_process,
-                    face_assignments,
-                    verification_model,
-                    val_transform,
-                    employee_db,
-                )
-            
-            # Display state accumulation/lock status indicator
-            if not self.registration_mode:
-                if len(self.confidence_buffer) > 0:
-                    buffer_size = len(self.confidence_buffer)
-                    progress_pct = min(100, int((buffer_size / 20) * 100))
-                    status_text = f"Analyzing: {progress_pct}%"
-                    status_color = (255, 193, 7)  # Amber
-                    frame = draw_status_chip(frame, status_text, status_color, progress_pct=progress_pct)
-            
-            # Display warning banner if face limit exceeded
-            if len(faces) > MAX_CONCURRENT_FACES:
-                warning_text = f"⚠ {len(faces)} faces detected - processing {MAX_CONCURRENT_FACES} max"
-                frame = draw_banner(frame, warning_text, (255, 165, 0), alpha=0.88, radius=10)
-            elif len(faces) > 1:
-                # ENHANCED: Show multi-person verification with primary/secondary breakdown
-                if self.ENABLE_MULTI_FACE_VERIFICATION:
-                    primary_count = 1 if self.primary_face_id is not None else 0
-                    secondary_count = len([fid for fid in self.face_identities_verified.keys() 
-                                         if fid != self.primary_face_id])
-                    verified_people = list(self.face_identities_verified.values())
-                    recognized_count = len([p for p in verified_people if "Not Registered" not in p])
-                    info_text = f"✓ {len(faces)} faces: 1 PRIMARY + {secondary_count} SEC | {recognized_count} recognized"
                 else:
-                    # Fallback to original multi-face display
-                    info_text = f"✓ Processing {len(faces)} faces simultaneously"
+                    num_faces = 0
                 
-                frame = draw_banner(frame, info_text, (0, 255, 0), alpha=0.85, radius=8)
-
+                # Draw status indicators
+                frame = self._draw_frame_status_indicators(frame, num_faces)
+            
             # Log performance metrics
             if hasattr(self, 'process_start'):
                 process_time = (time.time() - self.process_start) * 1000
                 self.performance_monitor.log_timing('total', process_time)
             
-            # Only put frame if queue is not full (prevents backup and lag)
+            # Queue frame for display
             try:
                 self.frame_queue.put_nowait(frame)
-                # Debug: Log frame queue success periodically
                 if self.frame_count % 300 == 0:
                     print(f"[DEBUG] Frame {self.frame_count} queued successfully")
             except queue.Full:
-                # Skip this frame to prevent lag
                 if self.frame_count % 30 == 0:
-                    print(f"[WARNING] Frame queue full! Skipping frame {self.frame_count} to prevent lag.")
+                    print(f"[WARNING] Frame queue full! Skipping frame {self.frame_count}.")
                 pass
 
     def update_display(self):
@@ -2153,34 +2174,61 @@ class AttendanceSystemGUI:
         # Reduced update frequency to 40ms (25 FPS) for better performance
         self.window.after(40, self.update_display)
     
-    def update_detection_display(self):
-        """Update the detection information display"""
-        # Determine identity status and build status message
+    def _determine_identity_status(self):
+        """Determine identity status and return identity display data."""
         if self.last_identity != "Not Registered" and self.last_identity != "Error":
             # Successful recognition
-            self.display_layer.update_detection_identity(self.last_identity, '#d5f4e6', '#27ae60', '✅')
-            status_text = f"🟢 Recognition successful: {self.last_identity}"
+            return {
+                'identity': self.last_identity,
+                'bg_color': '#d5f4e6',
+                'fg_color': '#27ae60',
+                'emoji': '✅',
+                'status': f"🟢 Recognition successful: {self.last_identity}"
+            }
         elif self.last_identity == "Error":
             # Error state
-            self.display_layer.update_detection_identity("Recognition Error", '#fdeaea', '#e74c3c', '❌')
-            status_text = "🔴 Error occurred during recognition"
+            return {
+                'identity': "Recognition Error",
+                'bg_color': '#fdeaea',
+                'fg_color': '#e74c3c',
+                'emoji': '❌',
+                'status': "🔴 Error occurred during recognition"
+            }
         else:
             # Unknown person or no face
             if self.last_identity == "Not Registered":
-                self.display_layer.update_detection_identity("Unknown Person", '#fff3cd', '#856404', '❓')
                 if len(self.confidence_buffer) > 0:
                     progress = min(100, int((len(self.confidence_buffer) / 20) * 100))
-                    status_text = f"📊 Analyzing face data... {progress}%"
+                    status = f"📊 Analyzing face data... {progress}%"
                 else:
-                    status_text = "🟡 Face detected but not recognized"
+                    status = "🟡 Face detected but not recognized"
+                return {
+                    'identity': "Unknown Person",
+                    'bg_color': '#fff3cd',
+                    'fg_color': '#856404',
+                    'emoji': '❓',
+                    'status': status
+                }
             else:
-                self.display_layer.update_detection_identity("No face detected", 'white', '#2c3e50', '👤')
-                status_text = "⭕ No face in camera view"
-        
-        # Update detection components through DisplayLayer
-        self.display_layer.update_emotion(self.last_emotion)
-        
-        # Color-code liveness with confidence
+                return {
+                    'identity': "No face detected",
+                    'bg_color': 'white',
+                    'fg_color': '#2c3e50',
+                    'emoji': '👤',
+                    'status': "⭕ No face in camera view"
+                }
+    
+    def _update_identity_display(self, identity_data):
+        """Update identity display with status information."""
+        self.display_layer.update_detection_identity(
+            identity_data['identity'],
+            identity_data['bg_color'],
+            identity_data['fg_color'],
+            identity_data['emoji']
+        )
+    
+    def _update_liveness_display(self):
+        """Update liveness status with confidence information."""
         if self.last_liveness == "Real":
             confidence_text = f"{self.last_liveness_confidence:.0%} confidence"
             self.display_layer.update_liveness_with_confidence(self.last_liveness, '#27ae60', confidence_text)
@@ -2190,6 +2238,18 @@ class AttendanceSystemGUI:
             self.display_layer.update_liveness_with_confidence(self.last_liveness, '#e74c3c', confidence_text)
         else:
             self.display_layer.update_liveness_with_confidence(self.last_liveness, '#3498db', "")
+    
+    def update_detection_display(self):
+        """Update the detection information display"""
+        # Determine identity status
+        identity_data = self._determine_identity_status()
+        
+        # Update identity through DisplayLayer
+        self._update_identity_display(identity_data)
+        
+        # Update detection components
+        self.display_layer.update_emotion(self.last_emotion)
+        self._update_liveness_display()
         
         # Update distance through DisplayLayer
         distance_text = f"{self.last_distance:.3f}" if self.last_distance != float('inf') else "N/A"
@@ -2200,33 +2260,33 @@ class AttendanceSystemGUI:
         
         # Update status with attendance message if available
         if self.last_attendance_message:
-            status_text = f"{status_text} | 📅 {self.last_attendance_message}"
+            status_text = f"{identity_data['status']} | 📅 {self.last_attendance_message}"
+        else:
+            status_text = identity_data['status']
         self.display_layer.update_detection_status(status_text)
+
     
-    def adjust_threshold(self):
-        """Adjust verification threshold with enhanced dialog"""
-        global OPTIMAL_THRESHOLD_GUI
-        
-        # Create custom dialog
+    def _create_threshold_dialog(self):
+        """Create and return the threshold adjustment dialog."""
         dialog = tk.Toplevel(self.window)
         dialog.title("⚙ Adjust Recognition Threshold")
         dialog.geometry("400x500")
         dialog.configure(bg='#f0f0f0')
         dialog.transient(self.window)
         dialog.grab_set()
-        
-        # Center the dialog
         dialog.geometry("+%d+%d" % (self.window.winfo_rootx() + 50, self.window.winfo_rooty() + 50))
-        
-        # Header
+        return dialog
+    
+    def _setup_threshold_header(self, dialog):
+        """Setup dialog header for threshold adjustment."""
         header = tk.Frame(dialog, bg='#3498db', height=60)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        
         tk.Label(header, text="🎯 Recognition Threshold Settings", font=('Arial', 14, 'bold'), 
                 fg='white', bg='#3498db').pack(pady=15)
-        
-        # Content
+    
+    def _setup_threshold_content(self, dialog):
+        """Setup content area with current threshold and descriptions."""
         content = tk.Frame(dialog, bg='#f0f0f0')
         content.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
@@ -2251,7 +2311,10 @@ class AttendanceSystemGUI:
             tk.Label(frame, text=f": {desc}", font=('Arial', 10), 
                     fg='#2c3e50', bg='#f0f0f0').pack(side=tk.LEFT)
         
-        # Threshold input
+        return content
+    
+    def _setup_threshold_input(self, content):
+        """Setup threshold input field and return StringVar."""
         tk.Label(content, text="Enter new threshold (0.1-3.0):", 
                 font=('Arial', 11), bg='#f0f0f0').pack(anchor=tk.W, pady=(15, 5))
         
@@ -2261,7 +2324,10 @@ class AttendanceSystemGUI:
         entry.select_range(0, tk.END)
         entry.focus()
         
-        # Buttons
+        return threshold_var
+    
+    def _setup_threshold_buttons(self, content, dialog, threshold_var):
+        """Setup dialog buttons (Save/Cancel)."""
         button_frame = tk.Frame(content, bg='#f0f0f0')
         button_frame.pack(fill=tk.X, pady=(20, 0))
         
@@ -2283,6 +2349,16 @@ class AttendanceSystemGUI:
         ttk.Button(button_frame, text="✓ Save", command=apply_threshold, 
                   style='Success.TButton').pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(button_frame, text="✗ Cancel", command=dialog.destroy).pack(side=tk.LEFT)
+    
+    def adjust_threshold(self):
+        """Adjust verification threshold with enhanced dialog"""
+        global OPTIMAL_THRESHOLD_GUI
+        
+        dialog = self._create_threshold_dialog()
+        self._setup_threshold_header(dialog)
+        content = self._setup_threshold_content(dialog)
+        threshold_var = self._setup_threshold_input(content)
+        self._setup_threshold_buttons(content, dialog, threshold_var)
     
     def view_employees(self):
         """View all employees with enhanced dialog"""
