@@ -14,14 +14,14 @@ from pathlib import Path
 import pytest
 
 # Ensure project root and src are on sys.path
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[0]
 SRC = ROOT / "src"
 for path in (ROOT, SRC):
     str_path = str(path)
     if str_path not in sys.path:
         sys.path.insert(0, str_path)
 
-from blink_detector import BlinkDetector
+from src.blink_detector import BlinkDetector
 
 if os.environ.get("PYTEST_CURRENT_TEST"):
     pytest.skip("Interactive blink demo; skip during pytest collection", allow_module_level=True)

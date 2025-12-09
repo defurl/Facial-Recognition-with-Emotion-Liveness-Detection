@@ -86,6 +86,8 @@ from src.ui.overlays import (
     draw_registration_overlay,
     draw_status_chip,
 )
+from src.ui.display_layer import DisplayLayer
+from src.ui.session_manager import SessionManager
 
 # Import performance optimized classes with fallback
 try:
@@ -302,8 +304,8 @@ class AttendanceSystemGUI:
         self.setup_styles()
         
         # Core state
-        self.cap = None
         self.running = False
+        # Note: Camera I/O now managed by SessionManager
         self.multiple_faces_warning = False
         
         # Processing control - optimized for performance
@@ -344,13 +346,10 @@ class AttendanceSystemGUI:
         # Thread-safe queue for frames - optimized queue size
         self.frame_queue = queue.Queue(maxsize=1)  # Smaller queue to reduce lag
         
-        # Camera lock to prevent race conditions
-        self.camera_lock = threading.Lock()
-        
-        # Thread safety locks
+        # Thread safety locks (camera locking now handled by SessionManager)
         self.emotion_lock = threading.Lock()
         self.liveness_lock = threading.Lock()
-        self.liveness_state_lock = threading.RLock()  # NEW: Protect liveness state variables
+        self.liveness_state_lock = threading.RLock()  # Protect liveness state variables
         
         # Emotion analysis failure tracking for graceful degradation
         self.emotion_failure_count = 0
@@ -480,7 +479,14 @@ class AttendanceSystemGUI:
             'transition_frames': 10
         }
         
+        # Initialize DisplayLayer (Phase 3 refactoring)
+        self.display_layer = DisplayLayer(self.window)
+        
         self.setup_ui()
+        
+        # Initialize SessionManager (Phase 3 refactoring - Stage 2)
+        self.session_manager = SessionManager(self.display_layer)
+        print("[STAGE2] SessionManager initialized")
 
     def update_face_tracking(self, face_positions):
         """Update face tracking to maintain consistent IDs across frames."""
@@ -945,6 +951,46 @@ class AttendanceSystemGUI:
         self.latency_var = tk.StringVar(value="Latency: --")
         self.fps_label = tk.Label(hidden_frame, textvariable=self.fps_var)
         self.latency_label = tk.Label(hidden_frame, textvariable=self.latency_var)
+        
+        # Register all widgets with DisplayLayer (Phase 3 refactoring)
+        self._register_widgets_with_display_layer()
+    
+    def _register_widgets_with_display_layer(self):
+        """Register all UI widgets with DisplayLayer for centralized display management."""
+        # Video display
+        self.display_layer.video_label = self.video_label
+        
+        # Identity and detection info
+        self.display_layer.identity_label = self.identity_label
+        self.display_layer.emotion_var = self.emotion_var
+        self.display_layer.liveness_var = self.liveness_var
+        self.display_layer.liveness_label = self.liveness_label
+        self.display_layer.liveness_confidence_var = self.liveness_confidence_var
+        self.display_layer.distance_var = self.distance_var
+        self.display_layer.confidence_var = self.confidence_var
+        
+        # Status and logging
+        self.display_layer.status_text = self.status_text
+        self.display_layer.log_listbox = self.log_listbox
+        
+        # EAR/Blink detection
+        self.display_layer.ear_canvas = self.ear_canvas
+        self.display_layer.ear_debug_text = self.ear_debug_text
+        self.display_layer.ear_current_label = self.ear_current_label
+        self.display_layer.blink_count_label = self.blink_count_label
+        
+        # Buttons for control
+        self.display_layer.start_button = self.start_button
+        self.display_layer.stop_button = self.stop_button
+        self.display_layer.register_button = self.register_button
+        self.display_layer.reset_button = self.reset_button
+        self.display_layer.clear_cache_button = self.clear_cache_button
+        
+        # Performance metrics
+        self.display_layer.fps_var = self.fps_var
+        self.display_layer.latency_var = self.latency_var
+        
+        print("[STAGE1] DisplayLayer widget registration complete")
     
     def toggle_fullscreen(self):
         """Toggle fullscreen mode"""
@@ -1120,60 +1166,6 @@ class AttendanceSystemGUI:
         except Exception as e:
             print(f"[EAR DISPLAY] Error updating EAR debug display: {e}")
     
-    def _open_camera_with_fallback(self):
-        """Try camera indices with fallback options"""
-        # Try multiple camera indices (try configured index first)
-        preferred_indices = [CAMERA_INDEX, 0, 1, 2]
-
-        for idx in preferred_indices:
-            cap = None
-            try:
-                print(f"Trying camera {idx}...")
-                # Use platform-default backend; on Linux cv2 will pick V4L2. If a backend is required,
-                # consider passing cv2.CAP_V4L2 as the second arg.
-                cap = cv2.VideoCapture(idx)
-
-                # VideoCapture always returns an object; guard by checking isOpened
-                if not cap or not cap.isOpened():
-                    if cap is not None:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
-                    continue
-
-                # Wait for camera to initialize
-                time.sleep(0.8)
-
-                # Test if we can actually read a frame
-                try:
-                    ret, test_frame = cap.read()
-                    if ret and test_frame is not None and getattr(test_frame, 'size', 0) > 0:
-                        print(f"[OK] Successfully opened camera {idx}")
-                        return cap
-                except Exception as read_err:
-                    print(f"  Frame read error on camera {idx}: {read_err}")
-
-                # Release and don't retry to avoid memory issues
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                cap = None
-                time.sleep(0.3)
-
-            except Exception as e:
-                print(f"  Error with camera {idx}: {e}")
-                if cap is not None:
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
-                continue
-        
-        print("[ERROR] Failed to open any camera")
-        return None
-
     def toggle_liveness_mode(self):
         """Toggle between lightweight and heavy liveness detection"""
         self.lightweight_liveness = self.lightweight_var.get()
@@ -1221,8 +1213,8 @@ class AttendanceSystemGUI:
         self.window.update_idletasks()
         print("[CAMERA] Starting camera initialization...")
         
-        self.cap = self._open_camera_with_fallback()
-        if not self.cap or not self.cap.isOpened():
+        # Delegate camera startup to SessionManager (Phase 3 Stage 2)
+        if not self.session_manager.start_camera():
             error_msg = (
                 "Failed to open camera.\n\n"
                 "Troubleshooting steps:\n"
@@ -1237,15 +1229,7 @@ class AttendanceSystemGUI:
             self.status_text.set("● Camera initialization failed. Check connection.")
             return
         
-        print("[CAMERA] Camera opened successfully")
-        
-        # Optimize capture settings
-        try:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-        except Exception:
-            pass
+        print("[CAMERA] Camera opened successfully via SessionManager")
         
         self.running = True
         self.start_button.config(state=tk.DISABLED)
@@ -1254,7 +1238,6 @@ class AttendanceSystemGUI:
         self.reset_button.config(state=tk.NORMAL)
         if hasattr(self, 'clear_cache_button'):
             self.clear_cache_button.config(state=tk.NORMAL)
-        # self.blink_button.config(state=tk.NORMAL)  # Commented out
         
         # Reset confidence buffer when camera starts
         self.confidence_buffer.clear()
@@ -1264,7 +1247,7 @@ class AttendanceSystemGUI:
         self.status_text.set("● Camera started. Face recognition active...")
         self.status_indicator.config(fg='#3fb950')  # Green
         
-        # Initialize explainer if not done
+        # Initialize explainer if not done (business logic - keep in app.py)
         if self.explainer is None and verification_model is not None:
             try:
                 self.explainer = ExplainabilityEngine(verification_model, DEVICE)
@@ -1272,7 +1255,7 @@ class AttendanceSystemGUI:
             except Exception as e:
                 print(f"[WARNING] Failed to initialize explainer: {e}")
         
-        # Initialize optimized processing pipeline
+        # Initialize optimized processing pipeline (business logic - keep in app.py)
         if verification_model is not None and OPTIMIZED_CORE_AVAILABLE:
             try:
                 self.async_processor, self.vectorized_knn = create_optimized_pipeline(
@@ -1291,12 +1274,12 @@ class AttendanceSystemGUI:
         else:
             self.status_text.set("● Camera started with standard processing...")
         
+        # Start capture thread and display update loop
         self.video_thread = threading.Thread(target=self.capture_frames, daemon=True)
         self.video_thread.start()
         self.update_display()
         
-        # Blink detection disabled
-        # self.window.after(2000, self.enable_blink_detection)  # Enable after 2 seconds
+        print("[STAGE2] start_camera() refactoring complete - using SessionManager")
     
     def handle_camera_failure(self):
         """Handle camera failure gracefully"""
@@ -1313,34 +1296,25 @@ class AttendanceSystemGUI:
         """Stop camera and clean up"""
         self.running = False
         
-        # Wait for threads to finish gracefully
-        # No emotion thread to wait for (using synchronous detection)
-        
-        # Wait for capture thread to finish
+        # Wait for capture thread to finish gracefully
         time.sleep(0.2)
         
-        # Cleanup optimized components
+        # Cleanup optimized components (business logic - keep in app.py)
         if self.async_processor is not None:
             self.async_processor.cleanup()
             self.async_processor = None
         self.vectorized_knn = None
         
-        if self.cap is not None:
-            try:
-                if self.cap.isOpened():
-                    self.cap.release()
-                self.cap = None  # Clear reference to prevent reuse
-            except Exception as e:
-                print(f"Error releasing camera: {e}")
-                self.cap = None
+        # Delegate camera shutdown to SessionManager (Phase 3 Stage 2)
+        self.session_manager.stop_camera()
         
+        # Update button states
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.register_button.config(state=tk.DISABLED)
         self.reset_button.config(state=tk.DISABLED)
         if hasattr(self, 'clear_cache_button'):
             self.clear_cache_button.config(state=tk.DISABLED)
-        # Blink button disabled by default
         
         # Update UI indicators
         self.status_text.set("● Camera stopped. Click 'Start' to resume.")
@@ -1361,8 +1335,20 @@ class AttendanceSystemGUI:
         self.liveness_label.config(fg='#58a6ff')
         self.confidence_var.set("N/A")
         
+        # Update stats display
         self.update_stats_display()
         self.update_debug_display()
+        
+        print("[STAGE2] stop_camera() refactoring complete - using SessionManager")
+    
+    def _end_registration(self, reason: str = "manual"):
+        """Helper to cleanly end registration and cleanup state"""
+        self.registration_mode = False
+        self.registration_state = None
+        # Reset spoof detection for next user (if registration was completed)
+        if reason == "save_complete":
+            self.reset_spoof_detection("registration completed")
+        print(f"[REGISTRATION] Ended registration - reason: {reason}")
     
     def start_registration(self):
         """Start employee registration with enhanced dialog"""
@@ -1555,14 +1541,10 @@ class AttendanceSystemGUI:
                 messagebox.showerror("Error", f"Failed to save: {e}")
                 print(f"Registration save error: {e}")
             finally:
-                self.registration_mode = False
-                self.registration_state = None
-                # Reset spoof detection for next user
-                self.reset_spoof_detection("registration completed")
+                self._end_registration("save_complete")
         
         def cancel_registration():
-            self.registration_mode = False
-            self.registration_state = None
+            self._end_registration("user_cancel")
             self.status_text.set("Registration cancelled")
             dialog.destroy()
         
@@ -1834,51 +1816,29 @@ class AttendanceSystemGUI:
     
     def capture_frames(self):
         """Optimized frame capture with async processing pipeline"""
-        consecutive_errors = 0
-        max_consecutive_errors = 30
-        
         # Initialize async event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        while self.running:
+        while self.session_manager.is_processing():
             try:
-                # Check if camera is still valid
-                if self.cap is None or not self.cap.isOpened():
-                    print("[ERROR] Camera is no longer available")
-                    self.window.after(0, lambda: self.handle_camera_failure())
-                    break
+                # Get next frame from SessionManager (Phase 3 Stage 3)
+                frame_data = self.session_manager.capture_next_frame()
                 
-                # Thread-safe camera read with lock
-                with self.camera_lock:
-                    ret, frame = self.cap.read()
-                
-                if not ret or frame is None or frame.size == 0:
-                    consecutive_errors += 1
-                    if consecutive_errors == 1:  # Log first error
-                        frame_info = 'None' if frame is None else f'shape={frame.shape}' if frame is not None else 'unknown'
-                        print(f"[ERROR] Frame read failed: ret={ret}, frame={frame_info}")
-                    if consecutive_errors >= max_consecutive_errors:
-                        print(f"[ERROR] Too many consecutive frame read errors ({consecutive_errors}). Stopping camera.")
-                        self.window.after(0, lambda: self.handle_camera_failure())
-                        break
+                if frame_data is None:
+                    # No frame available, sleep briefly and continue
                     time.sleep(0.01)
                     continue
                 
-                # Reset error counter on successful read
-                consecutive_errors = 0
+                frame, timestamp = frame_data
                 
+                # Reset error counter on successful read
                 # Debug: Log successful frame capture periodically
                 if self.frame_count % 300 == 0:  # Every 10 seconds at 30fps
                     print(f"[DEBUG] Frame capture OK: {frame.shape}, frame #{self.frame_count}")
                 
             except Exception as e:
-                consecutive_errors += 1
-                print(f"Frame capture error: {e}")
-                if consecutive_errors >= max_consecutive_errors:
-                    print(f"[ERROR] Too many errors. Stopping camera.")
-                    self.window.after(0, lambda: self.handle_camera_failure())
-                    break
+                print(f"[CAPTURE] Frame capture error: {e}")
                 time.sleep(0.01)
                 continue
             
@@ -2195,62 +2155,53 @@ class AttendanceSystemGUI:
     
     def update_detection_display(self):
         """Update the detection information display"""
+        # Determine identity status and build status message
         if self.last_identity != "Not Registered" and self.last_identity != "Error":
             # Successful recognition
-            self.identity_label.config(text=f"✅ {self.last_identity}", 
-                                     bg='#d5f4e6', fg='#27ae60')
+            self.display_layer.update_detection_identity(self.last_identity, '#d5f4e6', '#27ae60', '✅')
             status_text = f"🟢 Recognition successful: {self.last_identity}"
         elif self.last_identity == "Error":
             # Error state
-            self.identity_label.config(text="❌ Recognition Error", 
-                                     bg='#fdeaea', fg='#e74c3c')
+            self.display_layer.update_detection_identity("Recognition Error", '#fdeaea', '#e74c3c', '❌')
             status_text = "🔴 Error occurred during recognition"
         else:
             # Unknown person or no face
             if self.last_identity == "Not Registered":
-                self.identity_label.config(text="❓ Unknown Person", 
-                                         bg='#fff3cd', fg='#856404')
+                self.display_layer.update_detection_identity("Unknown Person", '#fff3cd', '#856404', '❓')
                 if len(self.confidence_buffer) > 0:
                     progress = min(100, int((len(self.confidence_buffer) / 20) * 100))
                     status_text = f"📊 Analyzing face data... {progress}%"
                 else:
                     status_text = "🟡 Face detected but not recognized"
             else:
-                self.identity_label.config(text="👤 No face detected", 
-                                         bg='white', fg='#2c3e50')
+                self.display_layer.update_detection_identity("No face detected", 'white', '#2c3e50', '👤')
                 status_text = "⭕ No face in camera view"
         
-        # Update individual components
-        self.emotion_var.set(self.last_emotion)
-        self.liveness_var.set(self.last_liveness)
+        # Update detection components through DisplayLayer
+        self.display_layer.update_emotion(self.last_emotion)
         
-        # Color-code liveness and show confidence
+        # Color-code liveness with confidence
         if self.last_liveness == "Real":
-            self.liveness_label.config(fg='#27ae60')
-            self.liveness_confidence_var.set(f"{self.last_liveness_confidence:.0%} confidence")
+            confidence_text = f"{self.last_liveness_confidence:.0%} confidence"
+            self.display_layer.update_liveness_with_confidence(self.last_liveness, '#27ae60', confidence_text)
         elif self.last_liveness == "Spoof":
-            self.liveness_label.config(fg='#e74c3c')
-            # Show inverse confidence for spoof (100% - confidence = certainty of spoof)
             spoof_certainty = 1.0 - self.last_liveness_confidence
-            self.liveness_confidence_var.set(f"{spoof_certainty:.0%} certainty")
+            confidence_text = f"{spoof_certainty:.0%} certainty"
+            self.display_layer.update_liveness_with_confidence(self.last_liveness, '#e74c3c', confidence_text)
         else:
-            self.liveness_label.config(fg='#3498db')
-            self.liveness_confidence_var.set("")
+            self.display_layer.update_liveness_with_confidence(self.last_liveness, '#3498db', "")
         
-        # Update distance
-        if self.last_distance != float('inf'):
-            self.distance_var.set(f"{self.last_distance:.3f}")
-        else:
-            self.distance_var.set("N/A")
-        
+        # Update distance through DisplayLayer
+        distance_text = f"{self.last_distance:.3f}" if self.last_distance != float('inf') else "N/A"
+        self.display_layer.update_distance(distance_text)
         
         # Update debug panel
         self.update_debug_panel()
         
-        # Update status (include attendance message if recent)
+        # Update status with attendance message if available
         if self.last_attendance_message:
             status_text = f"{status_text} | 📅 {self.last_attendance_message}"
-        self.status_text.set(status_text)
+        self.display_layer.update_detection_status(status_text)
     
     def adjust_threshold(self):
         """Adjust verification threshold with enhanced dialog"""
@@ -3022,6 +2973,7 @@ Quality Assessment:
             return {
                 "faces": faces,
                 "face_assignments": {idx: res.get("face_id", idx) for idx, res in enumerate(results)},
+                "primary_face_id": self.primary_face_id,  # Include primary face for role-based coloring
             }
 
         def process_cb(_frame, face_idx, bbox, context):
@@ -3039,18 +2991,21 @@ Quality Assessment:
             self.face_emotions.clear()
             self.face_liveness.clear()
 
-            for res in per_face_results:
+            for face_idx, res in enumerate(per_face_results):
                 face_id = res.get("face_id", res.get("face_idx", 0))
                 bbox = res.get("bbox", (0, 0, 0, 0))
                 embedding = res.get("embedding")
                 is_live = res.get("is_live", False)
 
+                # Apply role-based coloring (primary vs secondary)
+                is_primary, is_secondary = face_roles(face_idx, face_id, context.get("primary_face_id"), self.ENABLE_MULTI_FACE_VERIFICATION)
+                
                 identity = "Processing..."
                 confidence = 0.0
 
                 if not is_live:
                     identity = "Spoof Detected"
-                    box_color = (0, 0, 255)
+                    box_color = (0, 0, 255)  # Red
                 elif self.vectorized_knn is not None and embedding is not None:
                     try:
                         predictions, confidences = self.vectorized_knn.predict_batch_with_confidence(
@@ -3062,21 +3017,21 @@ Quality Assessment:
                             identity_names = list(employee_db.keys())
                             if 0 <= prediction < len(identity_names) and confidence >= CONFIDENCE_REJECTION_THRESHOLD:
                                 identity = identity_names[prediction]
-                                box_color = (0, 255, 0)
+                                box_color = role_box_color(is_primary, is_secondary)  # Apply role color
                                 self.log_attendance(identity, confidence, "Neutral", "Real")
                             else:
                                 identity = "Not Registered"
-                                box_color = (0, 165, 255)
+                                box_color = role_box_color(is_primary, is_secondary)
                         else:
                             identity = "Not Registered"
-                            box_color = (0, 165, 255)
+                            box_color = role_box_color(is_primary, is_secondary)
                     except Exception as e:
                         print(f"[VECTORIZED KNN ERROR] {e}")
                         identity = "Error"
                         box_color = (0, 0, 255)
                 else:
                     identity = "Not Registered"
-                    box_color = (0, 165, 255)
+                    box_color = role_box_color(is_primary, is_secondary)
 
                 self.face_identities.append(identity)
                 self.face_confidences.append(confidence)

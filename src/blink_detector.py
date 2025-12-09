@@ -27,22 +27,23 @@ class BlinkDetector:
     """
     
     # MediaPipe Face Mesh landmark indices for eyes
+    # https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model_uv_visualization.png
     LEFT_EYE_INDICES = {
-        'outer': 33,      # p1 - outer corner
-        'inner': 133,     # p4 - inner corner
-        'top_1': 159,     # p2 - top outer
-        'top_2': 145,     # p3 - top inner
-        'bottom_1': 23,   # p6 - bottom outer
-        'bottom_2': 133   # p5 - bottom inner (reusing inner corner)
+        'outer': 33,      # p1 - left eye outer corner
+        'inner': 133,     # p4 - left eye inner corner
+        'top_1': 159,     # p2 - left eye top outer
+        'top_2': 145,     # p3 - left eye top inner
+        'bottom_1': 23,   # p6 - left eye bottom outer
+        'bottom_2': 130   # p5 - left eye bottom inner (FIXED from 133)
     }
     
     RIGHT_EYE_INDICES = {
-        'outer': 362,     # p1 - outer corner
-        'inner': 263,     # p4 - inner corner
-        'top_1': 386,     # p2 - top outer
-        'top_2': 374,     # p3 - top inner
-        'bottom_1': 253,  # p6 - bottom outer
-        'bottom_2': 263   # p5 - bottom inner (reusing inner corner)
+        'outer': 362,     # p1 - right eye outer corner
+        'inner': 263,     # p4 - right eye inner corner
+        'top_1': 386,     # p2 - right eye top outer
+        'top_2': 374,     # p3 - right eye top inner
+        'bottom_1': 253,  # p6 - right eye bottom outer
+        'bottom_2': 260   # p5 - right eye bottom inner (FIXED from 263)
     }
     
     def __init__(self, ear_threshold=0.5, history_size=30, min_blink_duration=0.08, max_blink_duration=0.8):
