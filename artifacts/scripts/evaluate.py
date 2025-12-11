@@ -5,7 +5,7 @@ large pair lists by using a DataLoader and batching, computes similarity scores
 correctly for both Euclidean and Cosine metrics, and saves ROC plots + JSON.
 
 Usage:
-    python scripts/evaluate_fixed.py
+    python artifacts/scripts/evaluate.py
 
 Optional args:
     --softmax-model PATH
@@ -14,7 +14,7 @@ Optional args:
     --batch-size N
     --metric euclidean|cosine (similarity metric to evaluate)
     --device auto|cpu|cuda
-    --output-dir outputs
+    --output-dir artifacts/outputs
 
 """
 from __future__ import annotations
@@ -39,9 +39,10 @@ from sklearn.metrics import roc_curve, auc
 from torch.utils.data import Dataset, DataLoader
 
 # Add src to path via relative import assumptions
-ROOT = Path(__file__).resolve().parent.parent
+ARTIFACTS_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = ARTIFACTS_ROOT.parent
 import sys
-sys.path.insert(0, str(ROOT / 'src'))
+sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
 from config import DEVICE as CONFIG_DEVICE, IMG_SIZE, OUTPUT_DIR  # type: ignore
 from data_loader import get_transforms, load_verification_pairs  # type: ignore
@@ -140,12 +141,12 @@ def evaluate_and_plot(results: dict, out_dir: Path) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--softmax-model', type=Path, default=ROOT / 'outputs' / 'best_softmax_model.pth')
-    p.add_argument('--metric-model', type=Path, default=ROOT / 'outputs' / 'best_metric_model.pth')
-    p.add_argument('--pairs', type=Path, default=ROOT / 'dataset' / 'verification_pairs_val.txt')
+    p.add_argument('--softmax-model', type=Path, default=ARTIFACTS_ROOT / 'outputs' / 'best_softmax_model.pth')
+    p.add_argument('--metric-model', type=Path, default=ARTIFACTS_ROOT / 'outputs' / 'best_metric_model.pth')
+    p.add_argument('--pairs', type=Path, default=ARTIFACTS_ROOT / 'dataset' / 'verification_pairs_val.txt')
     p.add_argument('--batch-size', type=int, default=256)
     p.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
-    p.add_argument('--out-dir', type=Path, default=ROOT / 'outputs')
+    p.add_argument('--out-dir', type=Path, default=ARTIFACTS_ROOT / 'outputs')
     return p.parse_args()
 
 

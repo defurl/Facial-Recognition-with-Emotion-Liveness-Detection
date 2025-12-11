@@ -1,9 +1,9 @@
 """Benchmark verification paths (fast cdist vs naive loop) on the current employee DB.
 
 Usage:
-  python scripts/bench_verification.py --trials 50 --device cuda
+    python artifacts/scripts/bench_verification.py --trials 50 --device cuda
 
-The script loads `outputs/employee_db.pt`, builds the embedding index, and times
+The script loads `artifacts/outputs/employee_db.pt`, builds the embedding index, and times
 both the vectorized cdist path and a naive per-identity loop. It also reports
 accept rates using the GUI threshold (with small-DB adjustment).
 """

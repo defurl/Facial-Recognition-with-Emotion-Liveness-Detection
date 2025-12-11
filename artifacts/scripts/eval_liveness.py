@@ -5,17 +5,17 @@ Liveness Detection Evaluation Script
 Evaluates liveness detector on labeled test images/videos.
 
 Usage:
-    python scripts/eval_liveness.py dataset/debug/
+    python artifacts/scripts/eval_liveness.py artifacts/dataset/debug/
 
 Directory structure expected:
-    dataset/debug/
+    artifacts/dataset/debug/
         real/           - Real face images/frames
         phone_static/   - Static phone images
         phone_moving/   - Moving phone video frames
 
 Outputs:
-    outputs/eval_liveness_results.json - Per-image detailed results
-    outputs/eval_liveness_summary.txt - Accuracy, precision, recall, confusion matrix
+    artifacts/outputs/eval_liveness_results.json - Per-image detailed results
+    artifacts/outputs/eval_liveness_summary.txt - Accuracy, precision, recall, confusion matrix
 """
 
 import os
@@ -27,7 +27,9 @@ from pathlib import Path
 from collections import defaultdict
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ARTIFACTS_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = ARTIFACTS_ROOT.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.liveness import LivenessDetector
 from src.utils import face_mesh_detector
@@ -56,7 +58,7 @@ def load_images_from_folder(folder_path, label, max_images=50):
     return images
 
 
-def evaluate_liveness(data_root='dataset/debug/', output_dir='outputs'):
+def evaluate_liveness(data_root='artifacts/dataset/debug/', output_dir='artifacts/outputs'):
     """Evaluate liveness detector on labeled test data"""
     
     print("="*70)
@@ -207,5 +209,5 @@ def evaluate_liveness(data_root='dataset/debug/', output_dir='outputs'):
 
 
 if __name__ == '__main__':
-    data_root = sys.argv[1] if len(sys.argv) > 1 else 'dataset/debug/'
+    data_root = sys.argv[1] if len(sys.argv) > 1 else 'artifacts/dataset/debug/'
     evaluate_liveness(data_root)

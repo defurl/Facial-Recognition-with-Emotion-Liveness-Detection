@@ -214,9 +214,9 @@ def main():
     
     if deps_ok and kaggle_ok and dataset_ok:
         print("\n✓ Setup complete! You can now:")
-        print("  1. Train models: python scripts/train_softmax.py")
-        print("  2. Train models: python scripts/train_metric.py")
-        print("  3. Evaluate: python scripts/evaluate.py")
+        print("  1. Train models: python artifacts/scripts/train_softmax.py")
+        print("  2. Train models: python artifacts/scripts/train_metric.py")
+        print("  3. Evaluate: python artifacts/scripts/evaluate.py")
         print("  4. Run GUI: python app.py")
     else:
         print("\n⚠ Setup incomplete. Please resolve issues above.")

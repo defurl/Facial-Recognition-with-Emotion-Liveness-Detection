@@ -10,13 +10,15 @@ import threading
 import time
 import pandas as pd
 
+from src.config import OUTPUT_DIR
+
 
 class AttendanceLogger:
     """
     Manages attendance logging with CSV storage and cooldown prevention.
     """
     
-    def __init__(self, csv_path='outputs/attendance_log.csv', cooldown_minutes=60):
+    def __init__(self, csv_path=None, cooldown_minutes=60):
         """
         Initialize attendance logger.
         
@@ -24,7 +26,8 @@ class AttendanceLogger:
             csv_path: Path to CSV file for logging
             cooldown_minutes: Minimum minutes between attendance marks for same employee
         """
-        self.csv_path = Path(csv_path)
+        default_path = OUTPUT_DIR / 'attendance_log.csv'
+        self.csv_path = Path(csv_path) if csv_path is not None else default_path
         self.cooldown_minutes = cooldown_minutes
         self.lock = threading.Lock()
         self.last_attendance = {}  # {employee_name: datetime}
@@ -368,7 +371,7 @@ if __name__ == "__main__":
     # Test the attendance logger
     print("Testing AttendanceLogger...")
     
-    logger = AttendanceLogger(csv_path='outputs/test_attendance.csv', cooldown_minutes=1)
+    logger = AttendanceLogger(csv_path=OUTPUT_DIR / 'test_attendance.csv', cooldown_minutes=1)
     
     # Test marking attendance
     success, msg = logger.mark_attendance("John Doe", 0.35, "Happy", "Real")

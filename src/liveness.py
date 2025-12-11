@@ -9,6 +9,8 @@ from collections import deque
 import time
 import threading
 
+from src.config import OUTPUT_DIR
+
 # Import blink detector (handle both relative and absolute imports)
 try:
     from .blink_detector import BlinkDetector
@@ -493,7 +495,7 @@ class LivenessDetector:
             import csv
             import os
             
-            outpath = 'outputs/liveness_debug.csv'
+            outpath = OUTPUT_DIR / 'liveness_debug.csv'
             write_header = not os.path.exists(outpath)
             
             # Extract key metrics

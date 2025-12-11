@@ -1,10 +1,10 @@
 """Embedding analysis utilities: t-SNE projection and Deep kNN retrieval.
 
 Example usage:
-    python scripts/embeddings_analysis.py --tsne --run-deepknn \
-        --gallery-dir dataset/classification_data/train_data \
-        --query-dir dataset/classification_data/val_data \
-        --model-path outputs/best_metric_model.pth --mode metric
+    python artifacts/scripts/embeddings_analysis.py --tsne --run-deepknn \
+        --gallery-dir artifacts/dataset/classification_data/train_data \
+        --query-dir artifacts/dataset/classification_data/val_data \
+        --model-path artifacts/outputs/best_metric_model.pth --mode metric
 """
 
 from __future__ import annotations
@@ -31,8 +31,9 @@ from sklearn.manifold import TSNE
 from torch.utils.data import DataLoader, Dataset
 
 # Ensure src/ is on the path
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT_DIR / "src"))
+ROOT_DIR = Path(__file__).resolve().parent.parent  # artifacts/
+PROJECT_ROOT = ROOT_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from config import DEVICE, EMBEDDING_DIM, OUTPUT_DIR  # type: ignore  # noqa: E402
 from data_loader import get_transforms  # type: ignore  # noqa: E402

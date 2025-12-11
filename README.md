@@ -19,17 +19,25 @@ Real-time facial recognition system for attendance tracking with liveness detect
 ```
 .
 ├── app.py                              Main GUI (3,191 lines, fully refactored)
-├── train_liveness.py                   CNN liveness model trainer
 ├── requirements.txt                    Dependencies
 ├── identities/                         ← Employee face samples (training data)
 │   ├── employee1/
 │   └── employee2/
-├── outputs/                            ← Generated models & logs
-│   ├── best_metric_model.pth           Face embedding model
-│   ├── liveness_detector.pth           CNN liveness detector
-│   ├── employee_db.pt                  Registered embeddings
-│   ├── attendance_log.csv              ← Daily attendance records
-│   └── analysis/                       t-SNE visualizations
+├── frontend/                           Web client (to be scaffolded)
+├── backend/                            API service (to be scaffolded)
+│   └── config.py                       Paths to artifacts (models/DB)
+├── artifacts/                          Data, checkpoints, scripts
+│   ├── outputs/                        Generated models & logs
+│   │   ├── best_metric_model.pth       Face embedding model
+│   │   ├── employee_db.pt              Registered embeddings
+│   │   ├── attendance_log.csv          ← Daily attendance records
+│   │   └── analysis/                   t-SNE visualizations
+│   └── scripts/                        Training & analysis
+│       ├── train_metric.py             Metric learning (triplet loss)
+│       ├── train_softmax.py            Classification training
+│       ├── evaluate.py                 ROC curve generation
+│       ├── embeddings_analysis.py      t-SNE & Deep-KNN analysis
+│       └── plot_results.py             Training visualization
 ├── src/                                Core modules
 │   ├── config.py                       Constants & hyperparameters
 │   ├── models.py                       FaceEmbeddingCNN + CBAM
@@ -54,12 +62,6 @@ Real-time facial recognition system for attendance tracking with liveness detect
 │       ├── display_layer.py            Widget abstraction (testable UI)
 │       ├── registration_handler.py     Employee enrollment workflow
 │       └── overlays.py                 Detection visualizations
-├── scripts/                            Training & analysis
-│   ├── train_metric.py                 Metric learning (triplet loss)
-│   ├── train_softmax.py                Classification training
-│   ├── evaluate.py                     ROC curve generation
-│   ├── embeddings_analysis.py          t-SNE & Deep-KNN analysis
-│   └── plot_results.py                 Training visualization
 └── tests/                              Unit & integration tests
     ├── conftest.py                     Pytest fixtures
     ├── test_all_modules.py             Full system validation (24 tests)
@@ -107,6 +109,21 @@ pytest tests/ -v  # All 24 tests pass
 
 ## 🔧 Core Components
 
+## ⚙️ Backend API
+
+The `backend` folder now hosts a FastAPI application (`backend/server.py`) that exposes the recognition, liveness, attendance, and registration pipelines over HTTP. Start it with:
+
+```bash
+pip install -r requirements.txt
+uvicorn backend.server:app --reload --host 0.0.0.0 --port 8000
+```
+
+Endpoints:
+- `GET /health` – sanity check for model load, employee count, and log locations.
+- `POST /verify` – submit `{ image_b64, threshold?, mark_attendance?, blink_sequence? }`, get a ranked list of matches plus blink-based liveness details.
+- `POST /register` – add new employees (`{ name, images_b64, replace_existing? }`), rebuilds the embedding index and persists to `artifacts/outputs/employee_db.pt`.
+- `GET /employees`, `GET/POST /threshold`, `GET /attendance/today`, `GET /attendance/summary`, `POST /attendance/mark` – helpers for the frontend to read/write attendance and threshold data.
+
 ### Face Recognition
 - **Model**: FaceEmbeddingCNN with CBAM attention
 - **Learning**: Metric learning (triplet loss) for generalization
@@ -114,16 +131,7 @@ pytest tests/ -v  # All 24 tests pass
 - **Threshold**: 0.8 (tunable via GUI)
 
 ### Liveness Detection
-**7 detection methods with gradual scoring:**
-1. Texture (LBP) - 20%
-2. Color (LAB) - 20%
-3. Moiré patterns (FFT) - 15%
-4. Motion (optical flow) - 20%
-5. Edges (Hough) - 8%
-6. Reflections - 7%
-7. Temporal consistency - 20%
-
-**Fast path**: Blink detection (EAR < 0.18) = instant liveness check
+Currently the system relies on blink detection via Eye Aspect Ratio (EAR) as the primary liveness signal. The fast path (EAR < 0.18) flags live faces, while other heuristics are kept as future enhancements.
 
 ### GUI Architecture (Phase 3 Refactored)
 - **SessionManager**: Lifecycle, threading, state
@@ -155,7 +163,7 @@ FACE_CONFIDENCE = 0.5              # Detection threshold
 |--------|-------|
 | **Face Detection** | 95%+ (MediaPipe) |
 | **Recognition Accuracy** | 91.3% (metric learning) |
-| **Liveness Detection** | 60-70% (traditional CV), 90%+ (CNN) |
+| **Liveness Detection** | Blink detection (EAR-based); no CNN training yet |
 | **Real-time Performance** | 20+ FPS (GPU), 8-10 FPS (CPU) |
 | **Inference Time** | ~50ms/frame |
 
@@ -190,13 +198,13 @@ pytest tests/ --cov=src --cov-report=html
 
 ### Train Custom Embedding Model
 ```bash
-python scripts/train_metric.py
-# Output: outputs/best_metric_model.pth
+python artifacts/scripts/train_metric.py
+# Output: artifacts/outputs/best_metric_model.pth
 ```
 
 ### Generate t-SNE Visualization
 ```bash
-python scripts/embeddings_analysis.py --reduction tsne --sample-size 1000
+python artifacts/scripts/embeddings_analysis.py --reduction tsne --sample-size 1000
 ```
 
 ### View Model Interpretability
@@ -219,13 +227,13 @@ Uses Grad-CAM++ to visualize which face regions drive recognition decisions.
 | `src/runtime/db.py` | Employee database operations |
 | `src/liveness.py` | Anti-spoofing verification |
 | `src/config.py` | Hyperparameters & constants |
-| `outputs/attendance_log.csv` | Attendance records |
+| `artifacts/outputs/attendance_log.csv` | Attendance records |
 
 ## 🔐 Privacy & Ethics
 
 - ⚠️ Requires consent before facial recognition
 - 🔒 Faces stored locally (identities/ folder)
-- 📋 Attendance logged (outputs/attendance_log.csv)
+- 📋 Attendance logged (artifacts/outputs/attendance_log.csv)
 - 🚫 Educational/research use only
 
 ## 📖 Documentation

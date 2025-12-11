@@ -240,7 +240,7 @@ try:
                         print(f"  Norm: {torch.norm(real_embedding, p=2, dim=1).item():.4f}")
     else:
         print(f"  ⚠ Model not found at {MODEL_METRIC_PATH}")
-        print(f"    Please train the model first: python scripts/train_metric.py")
+        print(f"    Please train the model first: python artifacts/scripts/train_metric.py")
 except Exception as e:
     print(f"  ✗ FAILED: {e}")
     import traceback
@@ -358,7 +358,7 @@ try:
     else:
         print("⚠ PARTIALLY OPERATIONAL")
         if not MODEL_METRIC_PATH.exists():
-            print("  Action needed: Train model with 'python scripts/train_metric.py'")
+            print("  Action needed: Train model with 'python artifacts/scripts/train_metric.py'")
         if not EMPLOYEE_DB_PATH.exists():
             print("  Action needed: Register employees using GUI")
     
@@ -376,7 +376,7 @@ print("\n" + "="*70)
 print("MODULE VERIFICATION COMPLETE")
 print("="*70)
 print("\nNext Steps:")
-print("  1. If model is missing: python scripts/train_metric.py")
+print("  1. If model is missing: python artifacts/scripts/train_metric.py")
 print("  2. Launch GUI: python app.py")
 print("  3. Register employees with 5-pose system")
 print("  4. Test face verification with registered employees")

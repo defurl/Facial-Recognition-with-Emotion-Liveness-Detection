@@ -7,7 +7,10 @@ from pathlib import Path
 
 # ============= Project Paths =============
 BASE_DIR = Path(__file__).parent.parent
-DATASET_DIR = BASE_DIR / "dataset"
+ARTIFACTS_DIR = BASE_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+
+DATASET_DIR = ARTIFACTS_DIR / "dataset"
 TRAIN_DIR = DATASET_DIR / "classification_data" / "train_data"
 VAL_DIR = DATASET_DIR / "classification_data" / "val_data"
 TEST_DIR = DATASET_DIR / "classification_data" / "test_data"
@@ -16,8 +19,8 @@ VERIFICATION_DIR = DATASET_DIR / "verification_data"
 VERIFICATION_VAL_PAIRS = DATASET_DIR / "verification_pairs_val.txt"
 VERIFICATION_TEST_PAIRS = DATASET_DIR / "verification_pairs_test.txt"
 
-OUTPUT_DIR = BASE_DIR / "outputs"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = ARTIFACTS_DIR / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============= Model Paths =============
 MODEL_SOFTMAX_PATH = OUTPUT_DIR / "best_softmax_model.pth"

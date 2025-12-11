@@ -142,7 +142,7 @@ def load_model_and_database():
         print(f"[OK] Loaded model from {MODEL_METRIC_PATH}")
     else:
         print(f"[WARNING] Model not found at {MODEL_METRIC_PATH}")
-        print("  Please train the model first using: python scripts/train_metric.py")
+        print("  Please train the model first using: python artifacts/scripts/train_metric.py")
     
     # Load transforms
     _, val_transform = get_transforms()

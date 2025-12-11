@@ -23,6 +23,7 @@ import random
 import sys
 sys.path.insert(0, 'src')
 from liveness_cnn import LivenessCNN
+from config import TRAIN_DIR, VAL_DIR, OUTPUT_DIR
 
 
 class LivenessDataset(Dataset):
@@ -191,10 +192,10 @@ class LivenessDataset(Dataset):
 
 
 def train_liveness_detector(
-    train_image_dir='dataset/classification_data/train_data',
-    val_image_dir='dataset/classification_data/val_data',
+    train_image_dir=str(TRAIN_DIR),
+    val_image_dir=str(VAL_DIR),
     backbone_path='best_face_embedding_model.pth',
-    output_path='outputs/liveness_detector.pth',
+    output_path=str(OUTPUT_DIR / 'liveness_detector.pth'),
     epochs=20,
     batch_size=32,
     learning_rate=0.001,
