@@ -2022,15 +2022,42 @@ class AttendanceSystemGUI:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        consecutive_empty_frames = 0
+        max_empty_frames = 300  # 3 seconds at 100 attempts/sec
+        first_empty_frame_logged = False
+        
+        print("[CAPTURE] Frame capture thread started")
+        
         while self.session_manager.is_processing():
             try:
                 # Get next frame from SessionManager (Phase 3 Stage 3)
                 frame_data = self.session_manager.capture_next_frame()
                 
                 if frame_data is None:
+                    consecutive_empty_frames += 1
+                    if not first_empty_frame_logged:
+                        print(f"[CAPTURE] No frame data available (attempt {consecutive_empty_frames})")
+                        first_empty_frame_logged = True
+                    
+                    if consecutive_empty_frames > max_empty_frames:
+                        print(f"[CRITICAL] No frames captured for 3 seconds! Camera may be disconnected.")
+                        print(f"[CRITICAL] Checking camera health...")
+                        if not self.session_manager.is_camera_healthy():
+                            print(f"[CRITICAL] Camera is not healthy. Attempting restart...")
+                            self.session_manager.stop_camera()
+                            time.sleep(0.5)
+                            if not self.session_manager.start_camera():
+                                print(f"[CRITICAL] Failed to restart camera!")
+                                break
+                            else:
+                                print(f"[CRITICAL] Camera restarted successfully")
+                        consecutive_empty_frames = 0
+                        first_empty_frame_logged = False
                     time.sleep(0.01)
                     continue
                 
+                consecutive_empty_frames = 0
+                first_empty_frame_logged = False
                 frame, timestamp = frame_data
                 
                 if self.frame_count % 300 == 0:
