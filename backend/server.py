@@ -115,14 +115,20 @@ def _decode_base64_image(b64data: str) -> np.ndarray:
         raise HTTPException(400, detail=f"Invalid image data: {exc}")
 
 
-def _get_primary_face(frame: np.ndarray) -> np.ndarray:
-    faces = detect_faces(frame)
-    if not faces:
+def _select_primary_face(frame: np.ndarray, faces=None):
+    candidates = faces if faces is not None else detect_faces(frame)
+    if not candidates:
         raise HTTPException(400, detail="No faces detected in the provided image")
-    primary = max(faces, key=lambda bbox: bbox[2] * bbox[3])
-    cropped = crop_face_with_padding(frame, *primary, padding_ratio=0.2)
+    primary_idx = max(range(len(candidates)), key=lambda idx: candidates[idx][2] * candidates[idx][3])
+    primary_bbox = candidates[primary_idx]
+    cropped = crop_face_with_padding(frame, *primary_bbox, padding_ratio=0.2)
     if cropped.size == 0:
         raise HTTPException(400, detail="Failed to crop detected face")
+    return cropped, candidates, primary_idx
+
+
+def _get_primary_face(frame: np.ndarray) -> np.ndarray:
+    cropped, _, _ = _select_primary_face(frame)
     return cropped
 
 
@@ -160,6 +166,8 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
 
     has_blinked, blinks_needed = detector.requires_blink(start_time, time.time(), min_blinks=1)
     blink_score = 1.0 if has_blinked else (0.5 if succeeded > 0 else 0.0)
+    frame_height, frame_width = frame.shape[:2]
+
     return {
         "has_blinked": has_blinked,
         "blink_score": blink_score,
@@ -201,7 +209,8 @@ def health() -> Dict[str, Any]:
 @app.post("/verify")
 def verify(request: VerifyRequest) -> Dict[str, Any]:
     frame = _decode_base64_image(request.image_b64)
-    face_crop = _get_primary_face(frame)
+    faces = detect_faces(frame)
+    face_crop, faces, primary_idx = _select_primary_face(frame, faces)
     embedding = _prepare_embedding(face_crop)
 
     if EMPLOYEE_INDEX is None:
@@ -233,6 +242,21 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
         "blink": blink_details,
         "all_distances": [
             {"name": name, "distance": float(dist)} for name, dist in sorted(all_distances, key=lambda x: x[1])[:5]
+        ],
+        "detections": [
+            {
+                "bbox": {
+                    "x": max(0.0, min(1.0, x / frame_width)),
+                    "y": max(0.0, min(1.0, y / frame_height)),
+                    "width": max(0.0, min(1.0, w / frame_width)),
+                    "height": max(0.0, min(1.0, h / frame_height)),
+                },
+                "is_primary": idx == primary_idx,
+                "identity": matched if idx == primary_idx and matched else None,
+                "confidence": float(confidence) if idx == primary_idx else None,
+                "liveness": liveness_status if idx == primary_idx else "Unknown",
+            }
+            for idx, (x, y, w, h) in enumerate(faces)
         ],
     }
 
