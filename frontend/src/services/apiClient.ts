@@ -15,9 +15,26 @@ const BASE_URL = process.env.REACT_APP_API_BASE_URL ?? "http://localhost:8000";
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`API error ${response.status}: ${text}`);
+    let message = text;
+    try {
+      const payload = JSON.parse(text);
+      if (payload.detail) {
+        if (Array.isArray(payload.detail)) {
+          message = payload.detail
+            .map((entry: any) => (entry.msg ? `${entry.loc?.join(".")}: ${entry.msg}` : JSON.stringify(entry)))
+            .join("; ");
+        } else if (typeof payload.detail === "string") {
+          message = payload.detail;
+        }
+      } else if (payload.message) {
+        message = payload.message;
+      }
+    } catch (error) {
+      // response was not JSON; keep raw text
+    }
+    throw new Error(message || `API error ${response.status}`);
   }
-  return response.json() as Promise<T>;
+  return (await response.json()) as T;
 }
 
 export async function pingHealth(): Promise<{ status: string }> {
@@ -40,6 +57,7 @@ export async function registerEmployee(payload: RegisterRequest): Promise<Regist
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  console.log("Registration response status:", res.status);
   return handleResponse<RegisterResponse>(res);
 }
 
@@ -50,7 +68,7 @@ export async function fetchThreshold(): Promise<ThresholdPayload> {
 
 export async function updateThreshold(payload: ThresholdPayload): Promise<ThresholdPayload> {
   const res = await fetch(`${BASE_URL}/threshold`, {
-    method: "PUT",
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -58,14 +76,14 @@ export async function updateThreshold(payload: ThresholdPayload): Promise<Thresh
 }
 
 export async function logAttendance(event: AttendanceEvent): Promise<void> {
-  await fetch(`${BASE_URL}/attendance/log`, {
+  await fetch(`${BASE_URL}/attendance/mark`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(event),
   });
 }
 
-export async function fetchEmployees(): Promise<EmployeeSummary[]> {
+export async function fetchEmployees(): Promise<EmployeeSummary> {
   const res = await fetch(`${BASE_URL}/employees`);
   return handleResponse(res);
 }

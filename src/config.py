@@ -101,6 +101,7 @@ PRIMARY_FACE_CENTER_WEIGHT = 0.4  # weight for centeredness in primary selection
 MAX_CONCURRENT_FACES = 4  # maximum number of faces to process simultaneously
 CONFIDENCE_REJECTION_THRESHOLD = 0.05  # minimum confidence to accept recognition - lowered to 5% based on analysis
 UNRECOGNIZED_DISTANCE_MULTIPLIER = 1.2  # stricter threshold for small databases to prevent identity mix-ups
+BLINK_THRESHOLD = 0.18  # Eye Aspect Ratio (EAR) threshold for monitoring blinks
 
 # ============= Feature Flags =============
 USE_MULTI_EMBEDDING = True  # use multi-embedding matching for verification

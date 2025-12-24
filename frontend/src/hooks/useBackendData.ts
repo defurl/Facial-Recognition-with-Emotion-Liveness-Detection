@@ -18,7 +18,7 @@ export function useBackendData() {
       .catch(() => setThreshold(null));
 
     fetchEmployees()
-      .then((list) => setEmployees(list.map((emp) => emp.name)))
+      .then((data) => setEmployees(data.employees))
       .catch(() => setEmployees([]));
   }, []);
 

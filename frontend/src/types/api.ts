@@ -1,15 +1,28 @@
 export interface VerifyRequest {
-  image?: string; // base64 or data URL from webcam capture
-  embedding?: number[]; // optional precomputed embedding
+  image_b64: string; // base64 or data URL from webcam capture
+  threshold?: number;
+  mark_attendance?: boolean;
+  blink_sequence?: string[];
+}
+
+export interface BlinkDetails {
+  has_blinked: boolean;
+  blink_score: number;
+  frames_processed: number;
+  min_ear?: number;
+  blinks_needed: number;
 }
 
 export interface VerifyResponse {
   identity: string | null;
   distance: number;
   confidence: number;
-  liveness: "pass" | "fail" | "unknown";
+  // Backend returns "Real" | "Spoof"
+  liveness: string;
+  threshold: number;
   metadata?: Record<string, unknown>;
   detections?: DetectedFace[];
+  blink?: BlinkDetails;
 }
 
 export interface BoundingBox {
@@ -43,23 +56,28 @@ export interface ThresholdPayload {
   threshold: number;
 }
 
+// Matches AttendanceRecordRequest in backend
 export interface AttendanceEvent {
-  identity: string;
-  status: string;
-  timestamp: string;
+  name: string;
+  distance: number;
+  emotion?: string;
+  liveness?: string;
 }
 
+// Matches /employees response
 export interface EmployeeSummary {
-  name: string;
-  tags?: string[];
+  count: number;
+  employees: string[];
 }
 
 export interface DailyAttendanceRecord {
   timestamp: string;
   employee_name: string;
-  confidence_distance?: string;
-  emotion?: string;
-  liveness_status?: string;
+  prob_distance: number; // or string based on backend serialization? backend sends "distance" in payload but in summary it might be different. 
+  // checking backend: _serialize_dataframe sends dataframe records. columns likely match logger.
+  // let's stick to generic keys for now or check backend logger.
+  // View backend logger to be sure.
+  [key: string]: unknown;
 }
 
 export interface AttendanceSummary {

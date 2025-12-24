@@ -1,38 +1,59 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { verifyFace } from "../services/apiClient";
-import { useCamera } from "../hooks/useCamera";
 import { useVerification } from "../context/verification";
 import "../App.css";
 
 export function VerificationPanel() {
-  const { videoRef, isReady, error, capture } = useCamera();
-  const { lastResult, setLastCapture, setLastResult } = useVerification();
-  const [status, setStatus] = useState<"idle" | "capturing" | "error" | "success">("idle");
-  const [message, setMessage] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Use shared Verification Context
+  const { videoRef, isReady, error, captureSequence, lastResult, setLastCapture, setLastResult, addHistory } = useVerification();
 
-  const handleVerify = async () => {
-    setStatus("capturing");
+  const [message, setMessage] = useState<string | null>(null);
+  const [isMirrored, setIsMirrored] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const autoVerifyRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleVerify = useCallback(async () => {
     setMessage(null);
     try {
-      const image = await capture();
-      const payload = await verifyFace({ image });
-      setLastCapture(image);
+      // Capture 15 frames with 50ms delay (~750ms total) for reliable blink detection
+      const frames = await captureSequence(15, 50);
+      const primaryFrame = frames[0];
+
+      const payload = await verifyFace({
+        image_b64: primaryFrame,
+        blink_sequence: frames,
+        mark_attendance: true
+      });
+
+      setLastCapture(primaryFrame);
       setLastResult(payload);
-      setStatus("success");
+      addHistory({
+        timestamp: Date.now(),
+        confidence: payload.confidence,
+        distance: payload.distance,
+        liveness: payload.liveness, // Will be "Spoof" if blink check fails
+      });
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Unable to verify");
-      setStatus("error");
     }
-  };
+  }, [captureSequence, setLastCapture, setLastResult, addHistory]);
 
-  const livenessLabel = useMemo(() => {
-    if (!lastResult) return "waiting";
-    const normalized = lastResult.liveness.toLowerCase();
-    if (normalized.includes("real")) return "live";
-    if (normalized.includes("spoof")) return "spoof?";
-    return normalized;
-  }, [lastResult]);
+  const toggleMirror = () => setIsMirrored(prev => !prev);
+
+  // Auto-verify loop (every 500ms if ready)
+  useEffect(() => {
+    if (isReady && !autoVerifyRef.current) {
+      autoVerifyRef.current = setInterval(() => {
+        handleVerify().catch(() => { }); // Silent fail for auto-verify
+      }, 800);
+    }
+    return () => {
+      if (autoVerifyRef.current) {
+        clearInterval(autoVerifyRef.current);
+        autoVerifyRef.current = null;
+      }
+    };
+  }, [isReady, handleVerify]); // Dependencies need to be stable
 
   const drawDetections = useCallback(() => {
     const canvas = canvasRef.current;
@@ -41,39 +62,90 @@ export function VerificationPanel() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const width = video.videoWidth || 640;
-    const height = video.videoHeight || 480;
-    canvas.width = width;
-    canvas.height = height;
+    // Match resolution exactly
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    // Prevent drawing if video not ready
+    if (!width || !height) return;
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
     ctx.clearRect(0, 0, width, height);
 
     const detections = lastResult?.detections ?? [];
-    if (!detections.length) {
-      return;
-    }
 
-    ctx.font = "500 12px 'Inter', system-ui, sans-serif";
-    ctx.textBaseline = "top";
-
+    // Draw detected faces
     detections.forEach((face) => {
-      const { bbox, is_primary, identity } = face;
-      const x = bbox.x * width;
-      const y = bbox.y * height;
+      const { bbox, is_primary, identity, confidence, liveness } = face;
+
       const w = bbox.width * width;
       const h = bbox.height * height;
-      const strokeColor = is_primary ? "rgba(16, 185, 129, 0.9)" : "rgba(248, 250, 252, 0.6)";
+      const rawX = bbox.x * width;
+
+      // Calculate X based on mirroring state
+      // If Mirrored: width - rawX - w
+      // If Normal: rawX
+      const x = isMirrored ? (width - rawX - w) : rawX;
+      const y = bbox.y * height;
+
+      // Box styling
+      const isSpoof = liveness?.toLowerCase() === "spoof";
+      const strokeColor = is_primary
+        ? (isSpoof ? "rgba(239, 68, 68, 0.9)" : "rgba(16, 185, 129, 0.9)")
+        : "rgba(148, 163, 184, 0.5)";
+
       ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = is_primary ? 3 : 2;
+      ctx.lineWidth = 3;
       ctx.strokeRect(x, y, w, h);
 
-      const label = identity || (is_primary ? "Primary" : "Candidate");
-      const textWidth = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(2, 6, 23, 0.85)";
-      ctx.fillRect(x, y - 24, textWidth + 16, 20);
-      ctx.fillStyle = "#f8fafc";
-      ctx.fillText(label, x + 8, y - 22);
+      if (is_primary) {
+        // Label Background
+        ctx.font = "600 14px 'Inter', sans-serif";
+        const idText = identity || "Unknown";
+        const confText = confidence ? `${Math.round(confidence)}%` : "";
+        const livenessText = liveness || "";
+
+        // Blink Debug Info
+        const blink = lastResult?.blink;
+        const debugText = blink
+          ? `EAR: ${blink.min_ear?.toFixed(2) ?? "--"} | Frames: ${blink.frames_processed} | Needed: ${blink.blinks_needed}`
+          : "";
+
+        // Identity Tag (Top)
+        const idWidth = ctx.measureText(idText).width;
+        ctx.fillStyle = strokeColor;
+        ctx.fillRect(x, y - 28, idWidth + 20, 28);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.textBaseline = "middle";
+        ctx.fillText(idText, x + 10, y - 14);
+
+        // Stats Tag (Bottom)
+        const bottomY = y + h;
+        const statsText = `${livenessText} ${confText}`;
+        const statsWidth = ctx.measureText(statsText).width;
+
+        ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+        ctx.fillRect(x, bottomY, statsWidth + 20, 28);
+
+        ctx.fillStyle = isSpoof ? "#fca5a5" : "#86efac";
+        ctx.fillText(statsText, x + 10, bottomY + 14);
+
+        // Debug Info (Bottom + 30) - Always show if spoof or if debugText exists
+        if (debugText) {
+          const debugWidth = ctx.measureText(debugText).width;
+          ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+          ctx.fillRect(x, bottomY + 30, debugWidth + 20, 24);
+          ctx.fillStyle = "#cbd5e1";
+          ctx.font = "500 12px 'Inter', monospace";
+          ctx.fillText(debugText, x + 10, bottomY + 42);
+        }
+      }
     });
-  }, [lastResult, videoRef]);
+  }, [lastResult, videoRef, isMirrored]);
 
   useEffect(() => {
     drawDetections();
@@ -83,39 +155,22 @@ export function VerificationPanel() {
     <article className="panel verification-panel">
       <div className="panel-header">
         <h3>Verification preview</h3>
-        <button className="ghost-button" onClick={handleVerify} disabled={!isReady || status === "capturing"}>
-          {status === "capturing" ? "Capturing…" : "Verify snapshot"}
+        <button className="ghost-button" onClick={toggleMirror}>
+          {isMirrored ? "Disable Mirror" : "Mirror Camera"}
         </button>
       </div>
       {error && <p className="muted">Camera error: {error}</p>}
       <div className="video-wrapper">
-        <video ref={videoRef} autoPlay playsInline muted className="preview-video" />
-        <div className={`status-pill ${lastResult ? (livenessLabel === "live" ? "ok" : "unavailable") : "waiting"}`}>
-          {lastResult ? `${lastResult.identity ?? "Unknown"} · ${livenessLabel}` : "No verification yet"}
-        </div>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`preview-video ${isMirrored ? "mirrored" : ""}`}
+        />
         <canvas ref={canvasRef} className="annotation-canvas" aria-hidden />
       </div>
       {message && <p className="muted error">{message}</p>}
-      {lastResult && (
-        <dl className="result-grid">
-          <div>
-            <dt>Identity</dt>
-            <dd>{lastResult.identity ?? "Unknown"}</dd>
-          </div>
-          <div>
-            <dt>Distance</dt>
-            <dd>{lastResult.distance.toFixed(3)}</dd>
-          </div>
-          <div>
-            <dt>Confidence</dt>
-            <dd>{(lastResult.confidence * 100).toFixed(1)}%</dd>
-          </div>
-          <div>
-            <dt>Liveness</dt>
-            <dd>{lastResult.liveness}</dd>
-          </div>
-        </dl>
-      )}
     </article>
   );
 }

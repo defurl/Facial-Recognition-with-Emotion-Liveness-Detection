@@ -209,10 +209,12 @@ def health() -> Dict[str, Any]:
 @app.post("/verify")
 def verify(request: VerifyRequest) -> Dict[str, Any]:
     frame = _decode_base64_image(request.image_b64)
+    frame_height, frame_width = frame.shape[:2]
     faces = detect_faces(frame)
     face_crop, faces, primary_idx = _select_primary_face(frame, faces)
     embedding = _prepare_embedding(face_crop)
 
+    print(f"[VERIFY] Processing verification request. Blink sequence: {len(request.blink_sequence) if request.blink_sequence else 0} frames")
     if EMPLOYEE_INDEX is None:
         raise HTTPException(400, detail="No employees registered yet")
 
@@ -229,12 +231,19 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
         blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1}
 
     liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
+    
+    # Validation Flow: Must pass liveness first
+    if liveness_status == "Spoof":
+        # Process ID for stats but DO NOT reveal identity for Spoof
+        # We can still return 'confidence' and 'distance' for debugging, but identity must be masked
+        matched = None
+        # Optionally we can force confidence to 0 or leave it for debug dashboard
 
-    if request.mark_attendance and matched:
+    if request.mark_attendance and matched and liveness_status == "Real":
         attendance_logger.mark_attendance(matched, min_distance, "Unknown", liveness_status)
 
     return {
-        "identity": matched or "Not Registered",
+        "identity": matched if liveness_status == "Real" else "Spoof Detected",
         "distance": float(min_distance),
         "confidence": float(confidence),
         "threshold": float(threshold),
@@ -264,6 +273,7 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
 @app.post("/register")
 def register(request: RegisterRequest) -> Dict[str, Any]:
     name = request.name.strip()
+    print(f"[REGISTER] Received registration request for '{name}' with {len(request.images_b64)} images")
     if name in EMPLOYEE_DB and not request.replace_existing:
         raise HTTPException(400, detail="Employee already exists (set replace_existing to true to override)")
 
@@ -315,3 +325,8 @@ def update_threshold(payload: ThresholdPayload) -> Dict[str, float]:
     THRESHOLD_VALUE = payload.threshold
     save_gui_threshold(THRESHOLD_VALUE)
     return {"threshold": THRESHOLD_VALUE}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

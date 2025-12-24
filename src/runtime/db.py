@@ -39,10 +39,19 @@ def build_embedding_index(
 
     for name, stored in employee_db.items():
         if use_multi_embedding and isinstance(stored, list):
-            emb_list = [emb.detach().float().cpu() for emb in stored]
+            # Ensure each embedding is [512] (1D) before stacking
+            emb_list = []
+            for emb in stored:
+                t = emb.detach().float().cpu()
+                if t.ndim == 2 and t.shape[0] == 1:
+                    t = t.squeeze(0)
+                emb_list.append(t)
         else:
             emb = stored[0] if isinstance(stored, list) else stored
-            emb_list = [emb.detach().float().cpu()]
+            t = emb.detach().float().cpu()
+            if t.ndim == 2 and t.shape[0] == 1:
+                t = t.squeeze(0)
+            emb_list = [t]
 
         if len(emb_list) == 0:
             continue
