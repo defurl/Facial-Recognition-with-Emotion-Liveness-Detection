@@ -18,6 +18,8 @@ export function AttendancePanel() {
 
   useEffect(() => {
     loadLogs();
+    const interval = setInterval(loadLogs, 5000); // Auto-refresh every 5s
+    return () => clearInterval(interval);
   }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -56,7 +58,7 @@ export function AttendancePanel() {
             placeholder="Manual entry name"
             className="compact-input"
           />
-          <button type="submit" disabled={!identity}>Log Presence</button>
+          <button type="submit" className="submit-btn" disabled={!identity}>Log Presence</button>
         </div>
       </form>
 

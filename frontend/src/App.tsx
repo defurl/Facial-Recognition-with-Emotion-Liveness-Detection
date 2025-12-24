@@ -117,7 +117,7 @@ function App() {
             </div>
 
             <div className="sidebar-section flex-grow">
-              <h3>Attendance Log</h3>
+
               <div className="attendance-wrapper">
                 <AttendancePanel />
               </div>

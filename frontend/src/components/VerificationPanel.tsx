@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { verifyFace } from "../services/apiClient";
 import { useVerification } from "../context/verification";
 import "../App.css";
@@ -10,13 +10,12 @@ export function VerificationPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [isMirrored, setIsMirrored] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const autoVerifyRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleVerify = useCallback(async () => {
     setMessage(null);
     try {
-      // Capture 15 frames with 50ms delay (~750ms total) for reliable blink detection
-      const frames = await captureSequence(15, 50);
+      // Fast Verification: Capture 1 frame (no blink delay)
+      const frames = await captureSequence(1, 0);
       const primaryFrame = frames[0];
 
       const payload = await verifyFace({
@@ -40,20 +39,35 @@ export function VerificationPanel() {
 
   const toggleMirror = () => setIsMirrored(prev => !prev);
 
-  // Auto-verify loop (every 500ms if ready)
+  // Auto-verify loop (recursive with delay to prevent overlap)
   useEffect(() => {
-    if (isReady && !autoVerifyRef.current) {
-      autoVerifyRef.current = setInterval(() => {
-        handleVerify().catch(() => { }); // Silent fail for auto-verify
-      }, 800);
-    }
-    return () => {
-      if (autoVerifyRef.current) {
-        clearInterval(autoVerifyRef.current);
-        autoVerifyRef.current = null;
+    let timeoutId: NodeJS.Timeout;
+    let mounted = true;
+
+    const loop = async () => {
+      if (!isReady) return;
+
+      try {
+        await handleVerify();
+      } catch (e) {
+        console.error("Auto-verify error:", e);
+      }
+
+      if (mounted) {
+        // Wait 100ms before next attempt (plus execution time of handleVerify)
+        timeoutId = setTimeout(loop, 100);
       }
     };
-  }, [isReady, handleVerify]); // Dependencies need to be stable
+
+    if (isReady) {
+      loop();
+    }
+
+    return () => {
+      mounted = false;
+      clearTimeout(timeoutId);
+    };
+  }, [isReady, handleVerify]);
 
   const drawDetections = useCallback(() => {
     const canvas = canvasRef.current;
@@ -90,6 +104,7 @@ export function VerificationPanel() {
       // If Normal: rawX
       const x = isMirrored ? (width - rawX - w) : rawX;
       const y = bbox.y * height;
+
 
       // Box styling
       const isSpoof = liveness?.toLowerCase() === "spoof";
