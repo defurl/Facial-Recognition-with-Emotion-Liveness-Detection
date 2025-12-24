@@ -13,7 +13,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import cv2
 import numpy as np
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image
@@ -210,7 +210,7 @@ def health() -> Dict[str, Any]:
 
 
 @app.post("/verify")
-def verify(request: VerifyRequest) -> Dict[str, Any]:
+def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     frame = _decode_base64_image(request.image_b64)
     frame_height, frame_width = frame.shape[:2]
     faces = detect_faces(frame)
@@ -253,7 +253,7 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
         # Optionally we can force confidence to 0 or leave it for debug dashboard
 
     if request.mark_attendance and matched and liveness_status == "Real":
-        attendance_logger.mark_attendance(matched, min_distance, "Unknown", liveness_status)
+        background_tasks.add_task(attendance_logger.mark_attendance, matched, min_distance, "Unknown", liveness_status)
 
     return {
         "identity": matched if liveness_status == "Real" else "Spoof Detected",

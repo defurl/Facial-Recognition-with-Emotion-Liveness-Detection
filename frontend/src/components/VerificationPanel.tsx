@@ -10,6 +10,7 @@ export function VerificationPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [isMirrored, setIsMirrored] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastAttendanceRef = useRef<number>(0);
 
   const handleVerify = useCallback(async () => {
     setMessage(null);
@@ -18,11 +19,19 @@ export function VerificationPanel() {
       const frames = await captureSequence(1, 0);
       const primaryFrame = frames[0];
 
+      // Throttle attendance marking: only allow every 5 seconds
+      const now = Date.now();
+      const shouldMarkAttendance = now - lastAttendanceRef.current > 5000;
+
       const payload = await verifyFace({
         image_b64: primaryFrame,
         blink_sequence: frames,
-        mark_attendance: true
+        mark_attendance: shouldMarkAttendance
       });
+
+      if (shouldMarkAttendance) {
+        lastAttendanceRef.current = now;
+      }
 
       setLastCapture(primaryFrame);
       setLastResult(payload);
