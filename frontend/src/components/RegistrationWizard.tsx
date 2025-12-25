@@ -1,33 +1,39 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useVerification } from "../context/verification";
-import { registerEmployee } from "../services/apiClient";
-// Internal constants
-const REGISTRATION_STATES = {
-    idle: "idle",
-    submitting: "submitting",
-    success: "success",
-    error: "error",
-} as const;
+import { registerEmployee, validatePose } from "../services/apiClient";
 
-
-type RegistrationStep = "initial" | "instructions" | "capture" | "review" | "completing";
-
-const POSES = [
+// 3 poses matching Python GUI
+const POSES: Array<{ id: "center" | "left" | "right"; label: string; instruction: string }> = [
     { id: "center", label: "Face Forward", instruction: "Look directly at the camera" },
     { id: "left", label: "Turn Left", instruction: "Turn your head slightly to the left" },
     { id: "right", label: "Turn Right", instruction: "Turn your head slightly to the right" },
-    { id: "up", label: "Look Up", instruction: "Tilt your head slightly up" },
-    { id: "down", label: "Look Down", instruction: "Tilt your head slightly down" },
 ];
 
+type RegistrationStep = "initial" | "instructions" | "capture" | "review" | "completing";
+
 export const RegistrationWizard = () => {
-    const { capture, isReady } = useVerification();
+    const { capture, isReady, stream } = useVerification();
     const [step, setStep] = useState<RegistrationStep>("initial");
     const [name, setName] = useState("");
     const [currentPoseIndex, setCurrentPoseIndex] = useState(0);
     const [captures, setCaptures] = useState<string[]>([]);
     const [status, setStatus] = useState<string>("");
     const [error, setError] = useState<string | null>(null);
+
+    // Local video ref for registration preview
+    const localVideoRef = useRef<HTMLVideoElement | null>(null);
+
+    // Pose validation state
+    const [poseValid, setPoseValid] = useState(false);
+    const [poseFeedback, setPoseFeedback] = useState("");
+    const validationIntervalRef = useRef<number | null>(null);
+
+    // Assign stream to local video when entering capture step
+    useEffect(() => {
+        if (step === "capture" && localVideoRef.current && stream) {
+            localVideoRef.current.srcObject = stream;
+        }
+    }, [step, stream]);
 
     const startRegistration = () => {
         if (!name.trim()) {
@@ -42,9 +48,48 @@ export const RegistrationWizard = () => {
         setStep("capture");
         setCurrentPoseIndex(0);
         setCaptures([]);
+        setPoseValid(false);
+        setPoseFeedback("Positioning...");
     };
 
+    // Real-time pose validation loop
+    const validateCurrentPose = useCallback(async () => {
+        if (step !== "capture" || !isReady) return;
+
+        try {
+            const image = await capture();
+            const targetPose = POSES[currentPoseIndex].id;
+            const result = await validatePose(image, targetPose);
+
+            setPoseValid(result.valid);
+            setPoseFeedback(result.valid ? "✓ Hold steady!" : result.feedback);
+        } catch (err) {
+            setPoseFeedback("Checking pose...");
+        }
+    }, [step, isReady, capture, currentPoseIndex]);
+
+    // Start/stop pose validation interval
+    useEffect(() => {
+        if (step === "capture") {
+            // Validate every 300ms
+            validationIntervalRef.current = window.setInterval(validateCurrentPose, 300);
+        } else {
+            if (validationIntervalRef.current) {
+                clearInterval(validationIntervalRef.current);
+                validationIntervalRef.current = null;
+            }
+        }
+
+        return () => {
+            if (validationIntervalRef.current) {
+                clearInterval(validationIntervalRef.current);
+            }
+        };
+    }, [step, validateCurrentPose]);
+
     const handleCapture = async () => {
+        if (!poseValid) return;
+
         try {
             const image = await capture();
             const newCaptures = [...captures, image];
@@ -52,6 +97,8 @@ export const RegistrationWizard = () => {
 
             if (currentPoseIndex < POSES.length - 1) {
                 setCurrentPoseIndex((prev) => prev + 1);
+                setPoseValid(false);
+                setPoseFeedback("Positioning...");
             } else {
                 setStep("review");
             }
@@ -64,7 +111,6 @@ export const RegistrationWizard = () => {
         setStep("completing");
         setStatus("Registering...");
         try {
-            console.log("Submitting registration:", { name, images: captures.length });
             await registerEmployee({
                 name,
                 images_b64: captures,
@@ -80,6 +126,16 @@ export const RegistrationWizard = () => {
             setError(err instanceof Error ? err.message : "Registration failed");
             setStep("review");
         }
+    };
+
+    const cancelRegistration = () => {
+        setStep("initial");
+        setName("");
+        setCaptures([]);
+        setCurrentPoseIndex(0);
+        setPoseValid(false);
+        setPoseFeedback("");
+        setError(null);
     };
 
     if (step === "initial") {
@@ -109,10 +165,11 @@ export const RegistrationWizard = () => {
                 <div className="info-box">
                     <p>• Position yourself 2-3 feet from the camera.</p>
                     <p>• Ensure good lighting on your face.</p>
-                    <p>• You will be asked to capture 3 poses: Center, Left, and Right.</p>
+                    <p>• You will capture 3 poses: <strong>Center</strong>, <strong>Left</strong>, and <strong>Right</strong>.</p>
+                    <p>• Wait for the green "✓ Hold steady!" before capturing.</p>
                 </div>
                 <div className="wizard-actions">
-                    <button onClick={() => setStep("initial")} className="action-btn secondary">
+                    <button onClick={cancelRegistration} className="action-btn secondary">
                         Cancel
                     </button>
                     <button onClick={startCapture} disabled={!isReady} className="action-btn primary">
@@ -133,10 +190,28 @@ export const RegistrationWizard = () => {
                     <p className="subtitle">{currentPose.instruction}</p>
                 </div>
 
-                <button onClick={handleCapture} className="action-btn primary full-width large">
-                    Capture Frame
+                {/* Live Camera Preview */}
+                <div className="registration-preview">
+                    <video
+                        ref={localVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="preview-video mirrored"
+                    />
+                    <div className={`pose-overlay ${poseValid ? "valid" : "invalid"}`}>
+                        {poseFeedback}
+                    </div>
+                </div>
+
+                <button
+                    onClick={handleCapture}
+                    disabled={!poseValid}
+                    className={`action-btn ${poseValid ? "primary" : "secondary"} full-width large`}
+                >
+                    {poseValid ? "Capture Frame" : "Adjust your pose..."}
                 </button>
-                <button onClick={() => setStep("initial")} className="link-btn">
+                <button onClick={cancelRegistration} className="link-btn">
                     Cancel
                 </button>
             </div>
@@ -150,6 +225,7 @@ export const RegistrationWizard = () => {
                     {captures.map((img, i) => (
                         <div key={i} className="thumbnail">
                             <img src={img} alt={`Pose ${i}`} />
+                            <span className="thumbnail-label">{POSES[i]?.label}</span>
                         </div>
                     ))}
                 </div>

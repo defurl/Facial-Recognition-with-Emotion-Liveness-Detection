@@ -87,3 +87,24 @@ export interface AttendanceSummary {
   liveness_real_count: number;
   liveness_spoof_count: number;
 }
+
+// Pose validation types
+export interface PoseValidateRequest {
+  image_b64: string;
+  target_pose: "center" | "left" | "right";
+}
+
+export interface PoseValidateResponse {
+  valid: boolean;
+  detected_pose: string;
+  target_pose: string;
+  feedback: string;
+  yaw: number;
+  pitch: number;
+}
+
+export interface DeleteEmployeeResponse {
+  success: boolean;
+  name: string;
+  remaining: number;
+}

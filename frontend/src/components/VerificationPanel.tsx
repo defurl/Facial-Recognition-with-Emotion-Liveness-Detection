@@ -3,7 +3,11 @@ import { verifyFace } from "../services/apiClient";
 import { useVerification } from "../context/verification";
 import "../App.css";
 
-export function VerificationPanel() {
+interface VerificationPanelProps {
+  isPaused?: boolean;
+}
+
+export function VerificationPanel({ isPaused = false }: VerificationPanelProps) {
   // Use shared Verification Context
   const { videoRef, isReady, error, captureSequence, lastResult, setLastCapture, setLastResult, addHistory } = useVerification();
 
@@ -42,7 +46,16 @@ export function VerificationPanel() {
         liveness: payload.liveness, // Will be "Spoof" if blink check fails
       });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Unable to verify");
+      // Suppress common transient errors to prevent flicker
+      const errorMsg = err instanceof Error ? err.message : "Unable to verify";
+      const suppressedErrors = [
+        "No faces detected",
+        "No employees registered",
+      ];
+      const shouldSuppress = suppressedErrors.some(s => errorMsg.includes(s));
+      if (!shouldSuppress) {
+        setMessage(errorMsg);
+      }
     }
   }, [captureSequence, setLastCapture, setLastResult, addHistory]);
 
@@ -54,7 +67,8 @@ export function VerificationPanel() {
     let mounted = true;
 
     const loop = async () => {
-      if (!isReady) return;
+      // Stop loop if paused or not ready
+      if (!isReady || isPaused) return;
 
       try {
         await handleVerify();
@@ -62,13 +76,13 @@ export function VerificationPanel() {
         console.error("Auto-verify error:", e);
       }
 
-      if (mounted) {
+      if (mounted && !isPaused) {
         // Wait 100ms before next attempt (plus execution time of handleVerify)
         timeoutId = setTimeout(loop, 100);
       }
     };
 
-    if (isReady) {
+    if (isReady && !isPaused) {
       loop();
     }
 
@@ -76,7 +90,7 @@ export function VerificationPanel() {
       mounted = false;
       clearTimeout(timeoutId);
     };
-  }, [isReady, handleVerify]);
+  }, [isReady, isPaused, handleVerify]);
 
   const drawDetections = useCallback(() => {
     const canvas = canvasRef.current;

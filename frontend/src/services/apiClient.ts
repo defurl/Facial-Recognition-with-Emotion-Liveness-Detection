@@ -8,6 +8,8 @@ import {
   EmployeeSummary,
   DailyAttendanceRecord,
   AttendanceSummary,
+  DeleteEmployeeResponse,
+  PoseValidateResponse,
 } from "../types/api";
 
 const BASE_URL = process.env.REACT_APP_API_BASE_URL ?? "http://localhost:8000";
@@ -95,5 +97,24 @@ export async function fetchAttendanceToday(): Promise<DailyAttendanceRecord[]> {
 
 export async function fetchAttendanceSummary(): Promise<AttendanceSummary> {
   const res = await fetch(`${BASE_URL}/attendance/summary`);
+  return handleResponse(res);
+}
+
+export async function deleteEmployee(name: string): Promise<DeleteEmployeeResponse> {
+  const res = await fetch(`${BASE_URL}/employees/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return handleResponse(res);
+}
+
+export async function validatePose(
+  image_b64: string,
+  target_pose: "center" | "left" | "right"
+): Promise<PoseValidateResponse> {
+  const res = await fetch(`${BASE_URL}/pose/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_b64, target_pose }),
+  });
   return handleResponse(res);
 }

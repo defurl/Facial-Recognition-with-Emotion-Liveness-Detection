@@ -5,7 +5,7 @@ import { VerificationPanel } from "./components/VerificationPanel";
 import { RegistrationPanel } from "./components/RegistrationPanel";
 import { AttendancePanel } from "./components/AttendancePanel";
 import { VerificationProvider } from "./context/verification";
-import { updateThreshold } from "./services/apiClient";
+import { updateThreshold, deleteEmployee } from "./services/apiClient";
 import { Modal } from "./components/Modal";
 
 
@@ -14,6 +14,10 @@ function App() {
   const [localThreshold, setLocalThreshold] = useState<number | null>(null);
   const [isRegistrationOpen, setIsRegistrationOpen] = useState(false);
   const [showStats, setShowStats] = useState(true);
+
+  // Delete confirmation modal state
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (backendThreshold !== null) {
@@ -25,6 +29,20 @@ function App() {
     if (localThreshold !== null) {
       await updateThreshold({ threshold: localThreshold });
       refresh();
+    }
+  };
+
+  const handleDeleteEmployee = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deleteEmployee(deleteTarget);
+      refresh();
+    } catch (err) {
+      console.error("Failed to delete employee:", err);
+    } finally {
+      setIsDeleting(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -51,7 +69,7 @@ function App() {
           </header>
 
           <div className="verification-stage">
-            <VerificationPanel />
+            <VerificationPanel isPaused={isRegistrationOpen} />
           </div>
 
           <footer className="action-bar">
@@ -108,6 +126,13 @@ function App() {
                     <div key={name} className="user-chip">
                       <div className="avatar">{name[0].toUpperCase()}</div>
                       <span>{name}</span>
+                      <button
+                        className="delete-btn"
+                        onClick={() => setDeleteTarget(name)}
+                        title="Delete user"
+                      >
+                        ×
+                      </button>
                     </div>
                   ))
                 ) : (
@@ -134,9 +159,32 @@ function App() {
           <RegistrationPanel />
         </Modal>
 
+        {/* Delete Confirmation Modal */}
+        {deleteTarget && (
+          <div className="confirm-modal-backdrop" onClick={() => setDeleteTarget(null)}>
+            <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete Employee</h3>
+              <p>Are you sure you want to remove <strong>{deleteTarget}</strong> from the system? This action cannot be undone.</p>
+              <div className="confirm-modal-actions">
+                <button className="cancel-btn" onClick={() => setDeleteTarget(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="danger-btn"
+                  onClick={handleDeleteEmployee}
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </VerificationProvider>
   );
 }
 
 export default App;
+

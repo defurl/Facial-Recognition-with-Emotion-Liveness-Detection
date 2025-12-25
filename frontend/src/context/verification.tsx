@@ -9,6 +9,7 @@ const DEFAULT_CONSTRAINTS: MediaStreamConstraints = {
 interface VerificationContextType {
   // Camera State
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  stream: MediaStream | null;
   isReady: boolean;
   error: string | null;
   capture: () => Promise<string>;
@@ -105,6 +106,7 @@ export function VerificationProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       videoRef,
+      stream: streamRef.current,
       isReady,
       error,
       capture,

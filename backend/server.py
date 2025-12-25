@@ -105,6 +105,11 @@ class AttendanceRecordRequest(BaseModel):
     liveness: str = "Unknown"
 
 
+class PoseValidateRequest(BaseModel):
+    image_b64: str
+    target_pose: str = Field(..., description="Target pose: 'center', 'left', or 'right'")
+
+
 def _decode_base64_image(b64data: str) -> np.ndarray:
     data = re.sub(r"^data:image/[^;]+;base64,", "", b64data)
     try:
@@ -225,8 +230,36 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     embedding = _prepare_embedding(face_crop)
 
     print(f"[VERIFY] Processing verification request. Blink sequence: {len(request.blink_sequence) if request.blink_sequence else 0} frames")
+    
+    # Handle case when no employees are registered
     if EMPLOYEE_INDEX is None:
-        raise HTTPException(400, detail="No employees registered yet")
+        print("[VERIFY] No employees registered - returning Unregistered")
+        threshold = round(request.threshold or THRESHOLD_VALUE, 4)
+        blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+        return {
+            "identity": "Unregistered",
+            "distance": 1.0,
+            "confidence": 0.0,
+            "threshold": float(threshold),
+            "liveness": "Real",
+            "blink": blink_details,
+            "all_distances": [],
+            "detections": [
+                {
+                    "bbox": {
+                        "x": max(0.0, min(1.0, x / frame_width)),
+                        "y": max(0.0, min(1.0, y / frame_height)),
+                        "width": max(0.0, min(1.0, w / frame_width)),
+                        "height": max(0.0, min(1.0, h / frame_height)),
+                    },
+                    "is_primary": idx == primary_idx,
+                    "identity": "Unregistered" if idx == primary_idx else None,
+                    "confidence": 0.0 if idx == primary_idx else None,
+                    "liveness": "Real" if idx == primary_idx else "Unknown",
+                }
+                for idx, (x, y, w, h) in enumerate(faces)
+            ],
+        }
 
     best_name, min_distance, all_distances = verify_embedding_fast(embedding)
     threshold = round(request.threshold or THRESHOLD_VALUE, 4)
@@ -307,6 +340,97 @@ def register(request: RegisterRequest) -> Dict[str, Any]:
 @app.get("/employees")
 def list_employees() -> Dict[str, Any]:
     return {"count": len(EMPLOYEE_DB), "employees": sorted(EMPLOYEE_DB.keys())}
+
+
+@app.delete("/employees/{name}")
+def delete_employee(name: str) -> Dict[str, Any]:
+    """Delete an employee from the database."""
+    if name not in EMPLOYEE_DB:
+        raise HTTPException(404, detail=f"Employee '{name}' not found")
+    
+    del EMPLOYEE_DB[name]
+    save_employee_db(EMPLOYEE_DB, EMPLOYEE_DB_PATH)
+    refresh_employee_index()
+    
+    print(f"[DELETE] Removed employee '{name}'")
+    return {"success": True, "name": name, "remaining": len(EMPLOYEE_DB)}
+
+
+@app.post("/pose/validate")
+def validate_pose(request: PoseValidateRequest) -> Dict[str, Any]:
+    """Validate if the user's head pose matches the target pose."""
+    from src.utils import estimate_head_pose_angles, validate_pose_for_target
+    
+    frame = _decode_base64_image(request.image_b64)
+    faces = detect_faces(frame)
+    
+    if not faces:
+        return {
+            "valid": False,
+            "detected_pose": "no_face",
+            "target_pose": request.target_pose,
+            "feedback": "No face detected. Please position your face in the camera.",
+            "yaw": 0.0,
+            "pitch": 0.0,
+        }
+    
+    # Get pose angles
+    yaw, pitch, roll, detected_label, _, _ = estimate_head_pose_angles(frame)
+    
+    # Debug: Log raw pose angles
+    print(f"[POSE] Raw angles - Yaw: {yaw:.1f}, Pitch: {pitch:.1f}, Roll: {roll:.1f}, Detected: {detected_label}")
+    
+    # Map target_pose to expected format
+    target = request.target_pose.lower()
+    
+    # Custom validation with widened thresholds for web use
+    # The camera shows a mirrored view, so we need to account for that
+    # When user turns their head LEFT (from their perspective), yaw is typically POSITIVE
+    # When user turns their head RIGHT (from their perspective), yaw is typically NEGATIVE
+    
+    # For a mirrored camera view (which is what users see):
+    # - User turns LEFT -> they see themselves turn left -> we detect POSITIVE yaw
+    # - User turns RIGHT -> they see themselves turn right -> we detect NEGATIVE yaw
+    
+    valid = False
+    feedback = "Adjust your pose"
+    
+    if target == "center":
+        # Accept if yaw is within ±15 degrees
+        valid = abs(yaw) <= 15
+        feedback = "✓ Hold steady!" if valid else "Look straight at camera"
+    elif target == "left":
+        # User turns left (positive yaw in mirrored view)
+        # Accept yaw between 10 and 45 degrees
+        valid = yaw > 10 and yaw < 60
+        if not valid:
+            if yaw <= 10:
+                feedback = "Turn more to your LEFT"
+            elif yaw >= 60:
+                feedback = "Too far left, come back a bit"
+    elif target == "right":
+        # User turns right (negative yaw in mirrored view)
+        # Accept yaw between -10 and -45 degrees
+        valid = yaw < -10 and yaw > -60
+        if not valid:
+            if yaw >= -10:
+                feedback = "Turn more to your RIGHT"
+            elif yaw <= -60:
+                feedback = "Too far right, come back a bit"
+    
+    if valid:
+        feedback = "✓ Hold steady!"
+    
+    print(f"[POSE] Target: {target}, Valid: {valid}, Feedback: {feedback}")
+    
+    return {
+        "valid": valid,
+        "detected_pose": detected_label,
+        "target_pose": target,
+        "feedback": feedback,
+        "yaw": float(yaw),
+        "pitch": float(pitch),
+    }
 
 
 @app.get("/attendance/today")
