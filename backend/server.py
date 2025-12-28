@@ -383,45 +383,41 @@ def validate_pose(request: PoseValidateRequest) -> Dict[str, Any]:
     # Map target_pose to expected format
     target = request.target_pose.lower()
     
-    # Custom validation with widened thresholds for web use
-    # The camera shows a mirrored view, so we need to account for that
-    # When user turns their head LEFT (from their perspective), yaw is typically POSITIVE
-    # When user turns their head RIGHT (from their perspective), yaw is typically NEGATIVE
-    
-    # For a mirrored camera view (which is what users see):
-    # - User turns LEFT -> they see themselves turn left -> we detect POSITIVE yaw
-    # - User turns RIGHT -> they see themselves turn right -> we detect NEGATIVE yaw
+    # Align with Python GUI logic from utils.py:
+    # pose_label = "left" if yaw < 0 else "right"
+    # So: yaw < 0 = LEFT, yaw > 0 = RIGHT
+    # Threshold in Python GUI: abs(yaw) > 20
     
     valid = False
     feedback = "Adjust your pose"
     
     if target == "center":
-        # Accept if yaw is within ±15 degrees
+        # Accept if yaw is within ±15 degrees (slightly lenient)
         valid = abs(yaw) <= 15
         feedback = "✓ Hold steady!" if valid else "Look straight at camera"
     elif target == "left":
-        # User turns left (positive yaw in mirrored view)
-        # Accept yaw between 10 and 45 degrees
-        valid = yaw > 10 and yaw < 60
+        # Python GUI: yaw < 0 = left
+        # Accept yaw between -20 and -60 degrees
+        valid = yaw < -15 and yaw > -60
         if not valid:
-            if yaw <= 10:
+            if yaw >= -15:
                 feedback = "Turn more to your LEFT"
-            elif yaw >= 60:
+            elif yaw <= -60:
                 feedback = "Too far left, come back a bit"
     elif target == "right":
-        # User turns right (negative yaw in mirrored view)
-        # Accept yaw between -10 and -45 degrees
-        valid = yaw < -10 and yaw > -60
+        # Python GUI: yaw > 0 = right
+        # Accept yaw between 20 and 60 degrees
+        valid = yaw > 15 and yaw < 60
         if not valid:
-            if yaw >= -10:
+            if yaw <= 15:
                 feedback = "Turn more to your RIGHT"
-            elif yaw <= -60:
+            elif yaw >= 60:
                 feedback = "Too far right, come back a bit"
     
     if valid:
         feedback = "✓ Hold steady!"
     
-    print(f"[POSE] Target: {target}, Valid: {valid}, Feedback: {feedback}")
+    print(f"[POSE] Target: {target}, Yaw: {yaw:.1f}, Valid: {valid}, Feedback: {feedback}")
     
     return {
         "valid": valid,
