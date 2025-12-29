@@ -229,9 +229,9 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     ear_variance = max_ear - min_ear
     
     # Blink detection: Significant EAR variance indicates eye closure occurred
-    # Threshold: 0.08 variance suggests eyes went from open to closed at some point
-    has_blinked = ear_variance > 0.08 and min_ear < 0.25
-    blink_score = 1.0 if has_blinked else (0.3 if ear_variance > 0.05 else 0.0)
+    # Threshold: 0.15 variance AND min_ear < 0.40 (more lenient for different face shapes)
+    has_blinked = ear_variance > 0.15 and min_ear < 0.40
+    blink_score = 1.0 if has_blinked else (0.3 if ear_variance > 0.10 else 0.0)
     
     print(f"[BLINK] Processed {len(ear_values)} frames. EAR range: {min_ear:.3f} - {max_ear:.3f}, Variance: {ear_variance:.3f}, Blinked: {has_blinked}")
     
@@ -333,28 +333,40 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     liveness_status = "Unknown"
     identity_to_mark = None  # Track who to mark attendance for
     
-    if request.blink_sequence:
+    # Smart blink processing: Only process when needed
+    should_process_blink = False
+    
+    if matched:
+        if attendance_logger.has_checked_in_today(matched):
+            # User already checked in today - skip blink, instant Real
+            liveness_status = "Real"
+            blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+            print(f"[VERIFY] User '{matched}' already checked in today. Skipping blink detection.")
+        else:
+            # User matched but not checked in - need blink verification
+            should_process_blink = True
+    else:
+        # User not matched - don't reveal anything, skip blink (waste of processing)
+        liveness_status = "Real"  # No security concern for unknown users
+        blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+    
+    if should_process_blink and request.blink_sequence:
         frames = [_decode_base64_image(b64) for b64 in request.blink_sequence]
         blink_details = _process_blink_sequence(frames)
         liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
+        print(f"[DEBUG] Blink processed: score={blink_details['blink_score']}, liveness={liveness_status}, matched={matched}")
         
         # If blink passed AND user matched, mark for attendance
-        if liveness_status == "Real" and matched:
+        if liveness_status == "Real":
             identity_to_mark = matched
-    else:
-        # Snap Verify logic (no blink sequence)
-        if matched and attendance_logger.has_checked_in_today(matched):
-             liveness_status = "Real"
-             blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
-        elif matched:
-             # User matched but not checked in -> Show as "Spoof" until liveness passed
-             liveness_status = "Spoof"
-             blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1}
-        else:
-             liveness_status = "Real"
-             blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+            print(f"[DEBUG] Set identity_to_mark = {identity_to_mark}")
+    elif should_process_blink:
+        # Need blink but no sequence provided yet
+        liveness_status = "Spoof"
+        blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1}
     
     # Mark attendance BEFORE nullifying matched (for blink pass case)
+    print(f"[DEBUG] Checking attendance: identity_to_mark={identity_to_mark}, mark_attendance={request.mark_attendance}")
     if identity_to_mark and request.mark_attendance:
         print(f"[ATTENDANCE] Marking attendance for {identity_to_mark} after blink verification")
         background_tasks.add_task(attendance_logger.mark_attendance, identity_to_mark, min_distance, "Unknown", liveness_status)

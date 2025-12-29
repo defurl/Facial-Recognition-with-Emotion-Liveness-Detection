@@ -29,7 +29,7 @@ class AttendanceLogger:
         default_path = OUTPUT_DIR / 'attendance_log.csv'
         self.csv_path = Path(csv_path) if csv_path is not None else default_path
         self.cooldown_minutes = cooldown_minutes
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # RLock allows reentrant locking
         self.last_attendance = {}  # {employee_name: datetime}
         self.today_attendees = set() # {employee_name}
         
@@ -144,9 +144,11 @@ class AttendanceLogger:
             tuple: (success: bool, message: str)
         """
         try:
+            print(f"[ATTENDANCE] mark_attendance called for '{employee_name}'")
             with self.lock:
                 # Check cooldown
                 can_mark, reason = self.can_mark_attendance(employee_name)
+                print(f"[ATTENDANCE] can_mark_attendance: {can_mark}, reason: {reason}")
                 if not can_mark:
                     return (False, reason)
             
@@ -172,16 +174,20 @@ class AttendanceLogger:
                     # Update today's set
                     self.today_attendees.add(employee_name)
                     
+                    print(f"[ATTENDANCE] SUCCESS: Wrote {employee_name} to {self.csv_path}. today_attendees now: {self.today_attendees}")
                     return (True, f"Attendance marked for {employee_name}")
                     
                 except PermissionError as e:
+                    print(f"[ATTENDANCE] ERROR: PermissionError writing attendance: {e}")
                     if attempt < max_retries - 1:
                         time.sleep(0.1 * (attempt + 1))  # Exponential backoff
                     else:
                         return (False, f"File locked: {e}")
                 except Exception as e:
+                    print(f"[ATTENDANCE] ERROR: Exception writing attendance: {e}")
                     return (False, f"Error writing attendance: {e}")
         except Exception as e:
+            print(f"[ATTENDANCE] ERROR: Outer exception: {e}")
             return (False, f"Attendance marking error: {e}")
     
     def get_today_records(self):

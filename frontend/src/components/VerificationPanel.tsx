@@ -34,27 +34,20 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         frameBufferRef.current.shift();
       }
 
-      // Throttle attendance marking: only allow every 5 seconds
-      const now = Date.now();
-      const shouldMarkAttendance = now - lastAttendanceRef.current > 5000;
-
       // Check if we have enough frames for blink detection
       const hasEnoughFrames = frameBufferRef.current.length >= 10;
 
       // Use blink sequence if we have enough frames (allows instant blink check)
+      // Always send mark_attendance=true - backend handles cooldown logic
       let payload = await verifyFace({
         image_b64: primaryFrame,
         blink_sequence: hasEnoughFrames ? frameBufferRef.current.slice(-15) : undefined,
-        mark_attendance: shouldMarkAttendance
+        mark_attendance: true
       });
 
       // Show blink overlay if needed
       const needsBlink = payload.liveness === "Spoof" && (payload.blink?.blinks_needed ?? 0) > 0;
       setBlinkChallenge(needsBlink);
-
-      if (shouldMarkAttendance && payload.liveness === "Real") {
-        lastAttendanceRef.current = now;
-      }
 
       setLastCapture(primaryFrame);
       setLastResult(payload);
