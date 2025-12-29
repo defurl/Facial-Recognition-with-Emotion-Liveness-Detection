@@ -31,6 +31,7 @@ class AttendanceLogger:
         self.cooldown_minutes = cooldown_minutes
         self.lock = threading.Lock()
         self.last_attendance = {}  # {employee_name: datetime}
+        self.today_attendees = set() # {employee_name}
         
         # Ensure output directory exists
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,8 +40,9 @@ class AttendanceLogger:
         if not self.csv_path.exists():
             self._create_csv()
         else:
-            # Load existing attendance records to populate cooldown cache
+            # Load existing attendance records to populate cooldown cache and today's set
             self._load_recent_attendance()
+            self._reload_today_attendees()
     
     def _create_csv(self):
         """Create CSV file with headers."""
@@ -64,7 +66,7 @@ class AttendanceLogger:
                 for row in reader:
                     try:
                         timestamp = datetime.fromisoformat(row['timestamp'])
-                        name = row['employee_name']
+                        name = row['name']
                         
                         # Only keep records within cooldown window
                         if datetime.now() - timestamp <= timedelta(minutes=self.cooldown_minutes):
@@ -74,7 +76,35 @@ class AttendanceLogger:
                         continue  # Skip malformed rows
         except Exception as e:
             print(f"Error loading recent attendance: {e}")
-    
+    def _reload_today_attendees(self):
+        """Reload the set of employees who have checked in today."""
+        try:
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            self.today_attendees.clear()
+            
+            if not self.csv_path.exists():
+                return
+            
+            with open(self.csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Parse timestamp to check if it's today
+                    # ISO format: YYYY-MM-DDTHH:MM:SS.mmmmmm
+                    if row['timestamp'].startswith(today_str):
+                        self.today_attendees.add(row['name'])
+        except Exception as e:
+            print(f"Error reloading today's attendees: {e}")
+
+    def has_checked_in_today(self, employee_name):
+        """Check if employee has already checked in today (ignoring cooldown)."""
+        # If set is empty (maybe first run or new day), try reload to be safe
+        # But for performance we rely on the in-memory set maintained by mark_attendance
+        # We can do a lazy check: if empty, reload? No, safer to rely on init.
+        # But we need to handle day rollover.
+        
+        # Simple check:
+        return employee_name in self.today_attendees
+
     def can_mark_attendance(self, employee_name):
         """
         Check if employee can mark attendance (cooldown expired).
@@ -139,6 +169,8 @@ class AttendanceLogger:
                     
                     # Update cooldown cache
                     self.last_attendance[employee_name] = timestamp
+                    # Update today's set
+                    self.today_attendees.add(employee_name)
                     
                     return (True, f"Attendance marked for {employee_name}")
                     

@@ -177,34 +177,70 @@ def _prepare_embedding(face_crop: np.ndarray) -> torch.Tensor:
 
 
 def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
-    detector = BlinkDetector(ear_threshold=BLINK_THRESHOLD)
-    start_time = time.time()
-    succeeded = 0
-    min_ear = float("inf")
-
-    for frame in frames:
+    """
+    Optimized blink detection using frame subsampling and EAR variance.
+    Instead of detecting a full blink cycle, we detect EAR variance (min vs max).
+    """
+    if not frames:
+        return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
+    
+    # Subsample: Take 5 evenly spaced frames for speed
+    num_samples = min(5, len(frames))
+    step = max(1, len(frames) // num_samples)
+    sampled_frames = [frames[i] for i in range(0, len(frames), step)][:num_samples]
+    
+    ear_values = []
+    
+    for frame in sampled_frames:
         if frame is None:
             continue
-        with FACE_MESH_LOCK:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = face_mesh_detector.process(rgb)
-        if not result or not result.multi_face_landmarks:
+        try:
+            with FACE_MESH_LOCK:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = face_mesh_detector.process(rgb)
+            if not result or not result.multi_face_landmarks:
+                continue
+            
+            # Quick EAR calculation (inline for speed)
+            landmarks = result.multi_face_landmarks[0].landmark
+            # Left eye EAR
+            left_v1 = abs(landmarks[159].y - landmarks[23].y)  # top-bottom outer
+            left_v2 = abs(landmarks[145].y - landmarks[130].y)  # top-bottom inner
+            left_h = abs(landmarks[33].x - landmarks[133].x)   # outer-inner corner
+            left_ear = (left_v1 + left_v2) / (2.0 * left_h) if left_h > 0.001 else 0
+            
+            # Right eye EAR
+            right_v1 = abs(landmarks[386].y - landmarks[253].y)
+            right_v2 = abs(landmarks[374].y - landmarks[260].y)
+            right_h = abs(landmarks[362].x - landmarks[263].x)
+            right_ear = (right_v1 + right_v2) / (2.0 * right_h) if right_h > 0.001 else 0
+            
+            avg_ear = (left_ear + right_ear) / 2.0
+            ear_values.append(avg_ear)
+        except Exception as e:
+            print(f"[BLINK] Frame processing error: {e}")
             continue
-        landmarks = result.multi_face_landmarks[0]
-        blink_detected, avg_ear, _ = detector.detect_blink(landmarks, timestamp=time.time())
-        succeeded += 1
-        min_ear = min(min_ear, avg_ear if avg_ear > 0 else min_ear)
-
-    has_blinked, blinks_needed = detector.requires_blink(start_time, time.time(), min_blinks=1)
-    blink_score = 1.0 if has_blinked else (0.5 if succeeded > 0 else 0.0)
-    frame_height, frame_width = frame.shape[:2]
-
+    
+    if not ear_values:
+        return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
+    
+    min_ear = min(ear_values)
+    max_ear = max(ear_values)
+    ear_variance = max_ear - min_ear
+    
+    # Blink detection: Significant EAR variance indicates eye closure occurred
+    # Threshold: 0.08 variance suggests eyes went from open to closed at some point
+    has_blinked = ear_variance > 0.08 and min_ear < 0.25
+    blink_score = 1.0 if has_blinked else (0.3 if ear_variance > 0.05 else 0.0)
+    
+    print(f"[BLINK] Processed {len(ear_values)} frames. EAR range: {min_ear:.3f} - {max_ear:.3f}, Variance: {ear_variance:.3f}, Blinked: {has_blinked}")
+    
     return {
         "has_blinked": has_blinked,
         "blink_score": blink_score,
-        "frames_processed": succeeded,
-        "min_ear": min_ear if min_ear != float("inf") else None,
-        "blinks_needed": blinks_needed,
+        "frames_processed": len(ear_values),
+        "min_ear": min_ear,
+        "blinks_needed": 0 if has_blinked else 1,
     }
 
 
@@ -294,27 +330,41 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     print(f"[VERIFY] Result: Best match '{best_name}' with distance {min_distance:.4f} (Threshold: {threshold}). Matched: {matched}")
 
     blink_details = None
+    liveness_status = "Unknown"
+    identity_to_mark = None  # Track who to mark attendance for
+    
     if request.blink_sequence:
         frames = [_decode_base64_image(b64) for b64 in request.blink_sequence]
         blink_details = _process_blink_sequence(frames)
+        liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
+        
+        # If blink passed AND user matched, mark for attendance
+        if liveness_status == "Real" and matched:
+            identity_to_mark = matched
     else:
-        # Fast mode: No blink sequence provided, assume Real (or skip liveness check)
-        blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
-
-    liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
+        # Snap Verify logic (no blink sequence)
+        if matched and attendance_logger.has_checked_in_today(matched):
+             liveness_status = "Real"
+             blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+        elif matched:
+             # User matched but not checked in -> Show as "Spoof" until liveness passed
+             liveness_status = "Spoof"
+             blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1}
+        else:
+             liveness_status = "Real"
+             blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
     
-    # Validation Flow: Must pass liveness first
+    # Mark attendance BEFORE nullifying matched (for blink pass case)
+    if identity_to_mark and request.mark_attendance:
+        print(f"[ATTENDANCE] Marking attendance for {identity_to_mark} after blink verification")
+        background_tasks.add_task(attendance_logger.mark_attendance, identity_to_mark, min_distance, "Unknown", liveness_status)
+    
+    # Mask identity for Spoof responses
     if liveness_status == "Spoof":
-        # Process ID for stats but DO NOT reveal identity for Spoof
-        # We can still return 'confidence' and 'distance' for debugging, but identity must be masked
         matched = None
-        # Optionally we can force confidence to 0 or leave it for debug dashboard
-
-    if request.mark_attendance and matched and liveness_status == "Real":
-        background_tasks.add_task(attendance_logger.mark_attendance, matched, min_distance, "Unknown", liveness_status)
 
     return {
-        "identity": matched if liveness_status == "Real" else "Spoof Detected",
+        "identity": matched if liveness_status == "Real" else (f"Liveness {liveness_status}" if matched else "Spoof Detected"),
         "distance": float(min_distance),
         "confidence": float(confidence),
         "threshold": float(threshold),

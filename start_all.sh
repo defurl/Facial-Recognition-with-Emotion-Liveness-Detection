@@ -20,9 +20,14 @@ export BACKEND_PORT="8000"
 # Navigate to project root (relative to script location)
 cd "$(dirname "$0")"
 
+# Activate conda environment
+echo "Activating conda environment: $ENVIRONMENT"
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate $ENVIRONMENT
+
 # Start Backend
 echo "[1/2] Starting Backend (FastAPI)..."
-python3 backend/server.py &
+python backend/server.py &
 BACKEND_PID=$!
 
 echo "Backend running with PID $BACKEND_PID (ENVIRONMENT=$ENVIRONMENT)"

@@ -13,27 +13,46 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
 
   const [message, setMessage] = useState<string | null>(null);
   const [isMirrored, setIsMirrored] = useState(false);
+  const [blinkChallenge, setBlinkChallenge] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastAttendanceRef = useRef<number>(0);
+
+  // Rolling buffer: Keep last 20 frames for instant blink check
+  const frameBufferRef = useRef<string[]>([]);
+  const BUFFER_SIZE = 20;
 
   const handleVerify = useCallback(async () => {
     setMessage(null);
     try {
-      // Fast Verification: Capture 1 frame (no blink delay)
+      // Capture single frame for fast verification
       const frames = await captureSequence(1, 0);
       const primaryFrame = frames[0];
+
+      // Add to rolling buffer (FIFO)
+      frameBufferRef.current.push(primaryFrame);
+      if (frameBufferRef.current.length > BUFFER_SIZE) {
+        frameBufferRef.current.shift();
+      }
 
       // Throttle attendance marking: only allow every 5 seconds
       const now = Date.now();
       const shouldMarkAttendance = now - lastAttendanceRef.current > 5000;
 
-      const payload = await verifyFace({
+      // Check if we have enough frames for blink detection
+      const hasEnoughFrames = frameBufferRef.current.length >= 10;
+
+      // Use blink sequence if we have enough frames (allows instant blink check)
+      let payload = await verifyFace({
         image_b64: primaryFrame,
-        blink_sequence: frames,
+        blink_sequence: hasEnoughFrames ? frameBufferRef.current.slice(-15) : undefined,
         mark_attendance: shouldMarkAttendance
       });
 
-      if (shouldMarkAttendance) {
+      // Show blink overlay if needed
+      const needsBlink = payload.liveness === "Spoof" && (payload.blink?.blinks_needed ?? 0) > 0;
+      setBlinkChallenge(needsBlink);
+
+      if (shouldMarkAttendance && payload.liveness === "Real") {
         lastAttendanceRef.current = now;
       }
 
@@ -43,7 +62,7 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         timestamp: Date.now(),
         confidence: payload.confidence,
         distance: payload.distance,
-        liveness: payload.liveness, // Will be "Spoof" if blink check fails
+        liveness: payload.liveness,
       });
     } catch (err) {
       // Suppress common transient errors to prevent flicker
@@ -136,8 +155,9 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
       const y = bbox.y * height;
 
 
-      // Box styling
-      const isSpoof = liveness?.toLowerCase() === "spoof";
+      // Box styling: Red for Spoof/Unverified, Green for Real
+      const isSpoof = liveness?.toLowerCase() === "spoof" || liveness !== "Real";
+
       const strokeColor = is_primary
         ? (isSpoof ? "rgba(239, 68, 68, 0.9)" : "rgba(16, 185, 129, 0.9)")
         : "rgba(148, 163, 184, 0.5)";
@@ -149,9 +169,12 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
       if (is_primary) {
         // Label Background
         ctx.font = "600 14px 'Inter', sans-serif";
-        const idText = identity || "Unknown";
+
+        // Show "Blink!" when liveness needed, otherwise show identity
+        const needsBlink = isSpoof && (lastResult?.blink?.blinks_needed ?? 0) > 0;
+        const idText = needsBlink ? "👁️ Blink to Verify" : (identity || "Unknown");
         const confText = confidence ? `${Math.round(confidence)}%` : "";
-        const livenessText = liveness || "";
+        const livenessText = needsBlink ? "Spoof" : (liveness || "");
 
         // Blink Debug Info
         const blink = lastResult?.blink;
