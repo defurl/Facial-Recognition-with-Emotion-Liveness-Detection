@@ -25,7 +25,8 @@ import json
 
 # Import project modules
 import sys
-sys.path.append('src')
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent / 'src'))
 from config import *
 from models import FaceEmbeddingCNN
 from data_loader import get_transforms

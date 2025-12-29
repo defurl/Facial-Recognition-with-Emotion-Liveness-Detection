@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 # Ensure project root and src are on sys.path
-ROOT = Path(__file__).resolve().parents[0]
+ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 for path in (ROOT, SRC):
     str_path = str(path)

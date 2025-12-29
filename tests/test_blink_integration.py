@@ -11,9 +11,8 @@ import time
 from pathlib import Path
 
 # Add paths
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
 
 from src.blink_detector import BlinkDetector
 from src.utils import face_mesh_detector
