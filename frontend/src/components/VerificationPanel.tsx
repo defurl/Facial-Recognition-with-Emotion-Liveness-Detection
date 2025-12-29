@@ -51,8 +51,15 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
       const suppressedErrors = [
         "No faces detected",
         "No employees registered",
+        "Failed to fetch",
+        "NetworkError",
+        "Network request failed"
       ];
       const shouldSuppress = suppressedErrors.some(s => errorMsg.includes(s));
+
+      // Clear detections on error so boxes don't persist when server is down or face is lost
+      setLastResult(null);
+
       if (!shouldSuppress) {
         setMessage(errorMsg);
       }

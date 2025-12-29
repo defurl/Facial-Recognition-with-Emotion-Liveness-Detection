@@ -358,7 +358,8 @@ body {
 
 .verification-stage .verification-panel {
   width: 100%;
-  max-width: 800px;
+  max-width: 640px;
+  /* align with camera */
   box-shadow: 0 0 50px rgba(59, 130, 246, 0.1);
 }
 
@@ -513,6 +514,7 @@ body {
 }
 
 .modal-header h2 {
+  color: white;
   margin: 0;
   font-size: 1.1rem;
 }

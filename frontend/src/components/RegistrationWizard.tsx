@@ -5,8 +5,8 @@ import { registerEmployee, validatePose } from "../services/apiClient";
 // 3 poses matching Python GUI
 const POSES: Array<{ id: "center" | "left" | "right"; label: string; instruction: string }> = [
     { id: "center", label: "Face Forward", instruction: "Look directly at the camera" },
-    { id: "left", label: "Turn Left", instruction: "Turn your head slightly to the left" },
-    { id: "right", label: "Turn Right", instruction: "Turn your head slightly to the right" },
+    { id: "left", label: "Turn Right", instruction: "Turn your head slightly to the right" },
+    { id: "right", label: "Turn Left", instruction: "Turn your head slightly to the left" },
 ];
 
 type RegistrationStep = "initial" | "instructions" | "capture" | "review" | "completing";
@@ -28,12 +28,15 @@ export const RegistrationWizard = () => {
     const [poseFeedback, setPoseFeedback] = useState("");
     const validationIntervalRef = useRef<number | null>(null);
 
-    // Assign stream to local video when entering capture step
+    // Locked frame state for auto-capture
+    const [lockedFrame, setLockedFrame] = useState<string | null>(null);
+
+    // Assign stream to local video when entering capture step OR when unlocking frame
     useEffect(() => {
-        if (step === "capture" && localVideoRef.current && stream) {
+        if (step === "capture" && !lockedFrame && localVideoRef.current && stream) {
             localVideoRef.current.srcObject = stream;
         }
-    }, [step, stream]);
+    }, [step, stream, lockedFrame]);
 
     const startRegistration = () => {
         if (!name.trim()) {
@@ -52,27 +55,43 @@ export const RegistrationWizard = () => {
         setPoseFeedback("Positioning...");
     };
 
+
+
     // Real-time pose validation loop
     const validateCurrentPose = useCallback(async () => {
-        if (step !== "capture" || !isReady) return;
+        if (step !== "capture" || !isReady || lockedFrame) return;
 
         try {
             const image = await capture();
             const targetPose = POSES[currentPoseIndex].id;
             const result = await validatePose(image, targetPose);
 
-            setPoseValid(result.valid);
-            setPoseFeedback(result.valid ? "✓ Hold steady!" : result.feedback);
+            if (result.valid) {
+                // Auto-capture on success
+                // Use the cropped face image from backend if available, otherwise fallback to full frame
+                setLockedFrame(result.face_image || image);
+                setPoseValid(true);
+                setPoseFeedback("Captured! Please confirm.");
+
+                // Stop validation loop temporarily
+                if (validationIntervalRef.current) {
+                    clearInterval(validationIntervalRef.current);
+                    validationIntervalRef.current = null;
+                }
+            } else {
+                setPoseValid(false);
+                setPoseFeedback(result.feedback);
+            }
         } catch (err) {
             setPoseFeedback("Checking pose...");
         }
-    }, [step, isReady, capture, currentPoseIndex]);
+    }, [step, isReady, capture, currentPoseIndex, lockedFrame]);
 
     // Start/stop pose validation interval
     useEffect(() => {
-        if (step === "capture") {
-            // Validate every 300ms
-            validationIntervalRef.current = window.setInterval(validateCurrentPose, 300);
+        if (step === "capture" && !lockedFrame) {
+            // Validate every 200ms (faster for responsiveness)
+            validationIntervalRef.current = window.setInterval(validateCurrentPose, 200);
         } else {
             if (validationIntervalRef.current) {
                 clearInterval(validationIntervalRef.current);
@@ -85,26 +104,29 @@ export const RegistrationWizard = () => {
                 clearInterval(validationIntervalRef.current);
             }
         };
-    }, [step, validateCurrentPose]);
+    }, [step, validateCurrentPose, lockedFrame]);
 
-    const handleCapture = async () => {
-        if (!poseValid) return;
+    const confirmCapture = () => {
+        if (!lockedFrame) return;
 
-        try {
-            const image = await capture();
-            const newCaptures = [...captures, image];
-            setCaptures(newCaptures);
+        const newCaptures = [...captures, lockedFrame];
+        setCaptures(newCaptures);
+        setLockedFrame(null); // Reset lock
 
-            if (currentPoseIndex < POSES.length - 1) {
-                setCurrentPoseIndex((prev) => prev + 1);
-                setPoseValid(false);
-                setPoseFeedback("Positioning...");
-            } else {
-                setStep("review");
-            }
-        } catch (err) {
-            setError("Failed to capture image");
+        if (currentPoseIndex < POSES.length - 1) {
+            setCurrentPoseIndex((prev) => prev + 1);
+            setPoseValid(false);
+            setPoseFeedback("Positioning...");
+        } else {
+            setStep("review");
         }
+    };
+
+    const retakeCapture = () => {
+        setLockedFrame(null);
+        setPoseValid(false);
+        setPoseFeedback("Positioning...");
+        // Effect will restart validation since lockedFrame is null
     };
 
     const handleSubmit = async () => {
@@ -136,6 +158,7 @@ export const RegistrationWizard = () => {
         setPoseValid(false);
         setPoseFeedback("");
         setError(null);
+        setLockedFrame(null);
     };
 
     if (step === "initial") {
@@ -190,27 +213,47 @@ export const RegistrationWizard = () => {
                     <p className="subtitle">{currentPose.instruction}</p>
                 </div>
 
-                {/* Live Camera Preview */}
-                <div className="registration-preview">
-                    <video
-                        ref={localVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="preview-video mirrored"
-                    />
+                {/* Live Camera Preview or Locked Frame */}
+                <div className="registration-preview" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    {lockedFrame ? (
+                        <img
+                            src={lockedFrame}
+                            alt="Captured Pose"
+                            className="preview-video mirrored"
+                            style={{ objectFit: 'contain', maxHeight: '100%', width: 'auto' }}
+                        />
+                    ) : (
+                        <video
+                            ref={localVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="preview-video mirrored"
+                        />
+                    )}
                     <div className={`pose-overlay ${poseValid ? "valid" : "invalid"}`}>
                         {poseFeedback}
                     </div>
                 </div>
 
-                <button
-                    onClick={handleCapture}
-                    disabled={!poseValid}
-                    className={`action-btn ${poseValid ? "primary" : "secondary"} full-width large`}
-                >
-                    {poseValid ? "Capture Frame" : "Adjust your pose..."}
-                </button>
+                {lockedFrame ? (
+                    <div className="wizard-actions full-width">
+                        <button onClick={confirmCapture} className="action-btn primary large">
+                            Confirm & Continue
+                        </button>
+                        <button onClick={retakeCapture} className="action-btn secondary large">
+                            Retake
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        disabled
+                        className="action-btn secondary full-width large"
+                    >
+                        Adjust your pose...
+                    </button>
+                )}
+
                 <button onClick={cancelRegistration} className="link-btn">
                     Cancel
                 </button>

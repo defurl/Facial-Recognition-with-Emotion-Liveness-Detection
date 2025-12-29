@@ -1841,6 +1841,13 @@ class AttendanceSystemGUI:
                 self.window.after(100, self.complete_registration)
             return None  # Don't process further
         
+        # Pause processing if waiting for user confirmation
+        if state.get('waiting_confirm', False):
+            # Optionally draw a "Paused" overlay or just return the existing frame
+            # Returning frame allows the video feed to continue (live view behind dialog)
+            # but skips quality checks and state updates
+            return frame 
+        
         # Draw registration overlay
         h, w = frame.shape[:2]
         instruction_text = state['instructions'][current_step]
@@ -1924,7 +1931,7 @@ class AttendanceSystemGUI:
     
     def _capture_registration_pose(self, cropped_face, state, val_transform, verification_model):
         """Capture an embedding for a registration pose."""
-        self.registration_feedback = "Captured!"
+        self.registration_feedback = "Captured! Reviewing..."
         self.registration_feedback_color = (0, 255, 0)
         
         try:
@@ -1936,15 +1943,79 @@ class AttendanceSystemGUI:
             with torch.no_grad():
                 embedding = verification_model(image_tensor, mode='metric')
             
-            state['frames'].append(cropped_face_resized.copy())
-            state['embeddings'].append(embedding.cpu())
+            # Store temporarily
+            state['temp_frame'] = cropped_face_resized.copy()
+            state['temp_embedding'] = embedding.cpu()
+            state['waiting_confirm'] = True
+            
+            # Trigger confirmation dialog on main thread
+            self.window.after(0, lambda: self._show_pose_confirmation_dialog(state))
+            
+        except Exception as e:
+            print(f"Capture error: {e}")
+            state['waiting_confirm'] = False
+
+    def _show_pose_confirmation_dialog(self, state):
+        """Show dialog to confirm the captured pose."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("📸 Confirm Capture")
+        dialog.geometry("400x550")
+        dialog.configure(bg='#f0f0f0')
+        dialog.transient(self.window)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.geometry("+%d+%d" % (self.window.winfo_rootx() + 50, self.window.winfo_rooty() + 50))
+        
+        # Image
+        cv_img = state['temp_frame']
+        rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb_img).resize((250, 250))
+        photo = ImageTk.PhotoImage(pil_img)
+        
+        lbl = tk.Label(dialog, image=photo, bg='white', relief='solid', borderwidth=2)
+        lbl.image = photo
+        lbl.pack(pady=20)
+        
+        instruction = state['instructions'][state['step']]
+        tk.Label(dialog, text=f"Pose: {instruction}", font=('Arial', 12, 'bold'), bg='#f0f0f0').pack()
+        
+        btn_frame = tk.Frame(dialog, bg='#f0f0f0')
+        btn_frame.pack(pady=20)
+        
+        def confirm():
+            # Commit the capture
+            state['frames'].append(state['temp_frame'])
+            state['embeddings'].append(state['temp_embedding'])
             state['step'] += 1
             state['hold_frames'] = 0
+            state['waiting_confirm'] = False
+            
+            # Cleanup temp
+            del state['temp_frame']
+            del state['temp_embedding']
             
             if state['step'] < len(state['poses_required']):
                 self.status_text.set(f"🔵 Step {state['step'] + 1}/{len(state['poses_required'])}")
-        except Exception as e:
-            print(f"Capture error: {e}")
+                self.registration_feedback = "Positioning..."
+            
+            dialog.destroy()
+            
+        def retry():
+            # Discard temp
+            if 'temp_frame' in state: del state['temp_frame']
+            if 'temp_embedding' in state: del state['temp_embedding']
+            
+            state['hold_frames'] = 0
+            state['waiting_confirm'] = False
+            self.registration_feedback = "Retry: Positioning..."
+            dialog.destroy()
+            
+        ttk.Button(btn_frame, text="✓ Confirm & Continue", command=confirm, style='Success.TButton').pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="↻ Retake", command=retry).pack(side=tk.LEFT, padx=10)
+        
+        # Handle window close as retry
+        dialog.protocol("WM_DELETE_WINDOW", retry)
     
     def _process_face_detection(self, frame):
         """Detect and track faces in the frame."""

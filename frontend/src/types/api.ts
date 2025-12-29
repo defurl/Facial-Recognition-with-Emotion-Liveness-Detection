@@ -101,6 +101,7 @@ export interface PoseValidateResponse {
   feedback: string;
   yaw: number;
   pitch: number;
+  face_image?: string;
 }
 
 export interface DeleteEmployeeResponse {

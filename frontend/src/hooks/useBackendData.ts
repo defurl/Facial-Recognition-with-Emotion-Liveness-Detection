@@ -24,6 +24,8 @@ export function useBackendData() {
 
   useEffect(() => {
     refresh();
+    const interval = setInterval(refresh, 5000); // Poll every 5 seconds
+    return () => clearInterval(interval);
   }, [refresh]);
 
   return {

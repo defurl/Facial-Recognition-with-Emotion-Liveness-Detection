@@ -61,6 +61,7 @@ EMPLOYEE_DB: Dict[str, list] = {}
 EMPLOYEE_INDEX: Optional[torch.Tensor] = None
 EMPLOYEE_OFFSETS: List = []
 THRESHOLD_VALUE: float = OPTIMAL_THRESHOLD_GUI
+LAST_DB_MTIME: float = 0.0  # Track database modification time
 
 FACE_MESH_LOCK = threading.Lock()
 MODEL_LOCK = threading.Lock()
@@ -79,6 +80,28 @@ def refresh_employee_index() -> None:
 
     EMPLOYEE_INDEX, EMPLOYEE_OFFSETS = build_embedding_index(EMPLOYEE_DB)
     set_embedding_index(EMPLOYEE_INDEX, EMPLOYEE_OFFSETS)
+
+
+def check_and_reload_db_if_changed() -> bool:
+    """Check if the database file has changed and reload if necessary."""
+    global EMPLOYEE_DB, LAST_DB_MTIME
+    
+    if not EMPLOYEE_DB_PATH.exists():
+        return False
+        
+    try:
+        current_mtime = EMPLOYEE_DB_PATH.stat().st_mtime
+        if current_mtime > LAST_DB_MTIME:
+            print(f"[DB] Detected database change. Reloading...")
+            EMPLOYEE_DB = load_employee_db(EMPLOYEE_DB_PATH)
+            LAST_DB_MTIME = current_mtime
+            refresh_employee_index()
+            print(f"[DB] Reloaded {len(EMPLOYEE_DB)} employees. Index updated.")
+            return True
+    except Exception as e:
+        print(f"[DB] Error checking for reload: {e}")
+    
+    return False
 
 
 class VerifyRequest(BaseModel):
@@ -199,6 +222,8 @@ def _startup() -> None:
     _, VAL_TRANSFORM = get_transforms()
     MODEL = load_verification_model(MODEL_METRIC_PATH, DEVICE)
     EMPLOYEE_DB = load_employee_db(EMPLOYEE_DB_PATH)
+    if EMPLOYEE_DB_PATH.exists():
+        LAST_DB_MTIME = EMPLOYEE_DB_PATH.stat().st_mtime
     THRESHOLD_VALUE = load_gui_threshold(OPTIMAL_THRESHOLD_GUI)
     refresh_employee_index()
 
@@ -339,6 +364,8 @@ def register(request: RegisterRequest) -> Dict[str, Any]:
 
 @app.get("/employees")
 def list_employees() -> Dict[str, Any]:
+    # Check for external updates before listing
+    check_and_reload_db_if_changed()
     return {"count": len(EMPLOYEE_DB), "employees": sorted(EMPLOYEE_DB.keys())}
 
 
@@ -401,21 +428,29 @@ def validate_pose(request: PoseValidateRequest) -> Dict[str, Any]:
         valid = yaw < -15 and yaw > -60
         if not valid:
             if yaw >= -15:
-                feedback = "Turn more to your LEFT"
+                feedback = "Turn more to your RIGHT"
             elif yaw <= -60:
-                feedback = "Too far left, come back a bit"
+                feedback = "Too far right, come back a bit"
     elif target == "right":
         # Python GUI: yaw > 0 = right
         # Accept yaw between 20 and 60 degrees
         valid = yaw > 15 and yaw < 60
         if not valid:
             if yaw <= 15:
-                feedback = "Turn more to your RIGHT"
+                feedback = "Turn more to your LEFT"
             elif yaw >= 60:
-                feedback = "Too far right, come back a bit"
+                feedback = "Too far left, come back a bit"
     
+    face_image_b64 = None
     if valid:
         feedback = "✓ Hold steady!"
+        # Return the cropped face so frontend can display exactly what is captured
+        try:
+            cropped, _, _ = _select_primary_face(frame, faces)
+            _, buffer = cv2.imencode('.jpg', cropped)
+            face_image_b64 = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
+        except Exception as e:
+            print(f"[POSE] Failed to crop face for display: {e}")
     
     print(f"[POSE] Target: {target}, Yaw: {yaw:.1f}, Valid: {valid}, Feedback: {feedback}")
     
@@ -426,6 +461,7 @@ def validate_pose(request: PoseValidateRequest) -> Dict[str, Any]:
         "feedback": feedback,
         "yaw": float(yaw),
         "pitch": float(pitch),
+        "face_image": face_image_b64
     }
 
 

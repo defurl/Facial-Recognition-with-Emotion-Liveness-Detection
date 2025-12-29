@@ -283,7 +283,7 @@ def estimate_head_pose_angles(image):
         
         # Determine pose label
         pose_label = "center"
-        if abs(yaw) > 20:
+        if abs(yaw) > 15:  # Lowered from 20 to prioritize L/R over U/D
             pose_label = "left" if yaw < 0 else "right"
         elif abs(pitch) > 10:
             pose_label = "up" if pitch > 0 else "down"
@@ -358,22 +358,24 @@ def validate_pose_for_target(yaw, pitch, target_pose, strict_tolerance=10.0, rel
         tuple: (matches: bool, tolerance_used: float, feedback: str)
     """
     try:
-        # Account for horizontally flipped camera - invert yaw for left/right detection
-        # When camera is flipped, turning right appears as negative yaw, turning left as positive yaw
-        mirrored_yaw = -yaw  # Invert yaw to match user's perspective
+        # Account for horizontally flipped camera
+        # User Feedback: "I had to turn left to verify right pose" -> implies current logic inverted
+        # Current: mirrored_yaw = -yaw. 
+        # Fix: Remove inversion to align with user's specific camera setup/perception
+        mirrored_yaw = yaw 
         
         yaw_tol = strict_tolerance if is_strict else relaxed_tolerance
-        pitch_tol = 60.0 if is_strict else 70.0  # Very lenient for pitch (camera angle variations)
+        pitch_tol = 60.0 if is_strict else 70.0
         
         if target_pose == "center":
             matches = abs(mirrored_yaw) <= yaw_tol and abs(pitch) <= pitch_tol
             feedback = "OK" if matches else f"Look straight"
         elif target_pose == "left":
-            target_yaw = -30
+            # Left means negative yaw
             matches = (mirrored_yaw < -15) and (mirrored_yaw > -50) and abs(pitch) <= pitch_tol
             feedback = "OK" if matches else f"Turn left"
         elif target_pose == "right":
-            target_yaw = 30
+            # Right means positive yaw
             matches = (mirrored_yaw > 15) and (mirrored_yaw < 50) and abs(pitch) <= pitch_tol
             feedback = "OK" if matches else f"Turn right"
         elif target_pose == "up":
