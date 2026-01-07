@@ -10,6 +10,9 @@ export interface BlinkDetails {
   blink_score: number;
   frames_processed: number;
   min_ear?: number;
+  max_ear?: number;
+  current_ear?: number;
+  threshold?: number;
   blinks_needed: number;
 }
 

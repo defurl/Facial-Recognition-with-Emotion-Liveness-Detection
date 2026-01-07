@@ -4,6 +4,7 @@ import { useBackendData } from "./hooks/useBackendData";
 import { VerificationPanel } from "./components/VerificationPanel";
 import { RegistrationPanel } from "./components/RegistrationPanel";
 import { AttendancePanel } from "./components/AttendancePanel";
+import { EARDebugPanel } from "./components/EARDebugPanel";
 import { VerificationProvider } from "./context/verification";
 import { updateThreshold, deleteEmployee } from "./services/apiClient";
 import { Modal } from "./components/Modal";
@@ -141,8 +142,11 @@ function App() {
               </div>
             </div>
 
-            <div className="sidebar-section flex-grow">
+            <div className="sidebar-section">
+              <EARDebugPanel />
+            </div>
 
+            <div className="sidebar-section flex-grow">
               <div className="attendance-wrapper">
                 <AttendancePanel />
               </div>

@@ -222,25 +222,40 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
             continue
     
     if not ear_values:
-        return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
+        return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "max_ear": None, "current_ear": None, "blinks_needed": 1}
     
     min_ear = min(ear_values)
     max_ear = max(ear_values)
-    ear_variance = max_ear - min_ear
+    current_ear = ear_values[-1]  # Most recent EAR for live display
     
-    # Blink detection: Significant EAR variance indicates eye closure occurred
-    # Threshold: 0.15 variance AND min_ear < 0.40 (more lenient for different face shapes)
-    has_blinked = ear_variance > 0.15 and min_ear < 0.40
-    blink_score = 1.0 if has_blinked else (0.3 if ear_variance > 0.10 else 0.0)
+    # Blink detection: Require ACTUAL eye closure, not just variance
+    # - min_ear < 0.35: Eyes must have actually closed (adjusted for typical EAR values)
+    # - max_ear > 0.45: Eyes must have been open at some point (proves transition)
+    # This prevents passing when user is simply still with eyes open
+    EAR_THRESHOLD = 0.35
+    has_blinked = min_ear < EAR_THRESHOLD and max_ear > 0.45
     
-    print(f"[BLINK] Processed {len(ear_values)} frames. EAR range: {min_ear:.3f} - {max_ear:.3f}, Variance: {ear_variance:.3f}, Blinked: {has_blinked}")
+    # Blink score: 1.0 if definite blink, partial score if close to threshold
+    if has_blinked:
+        blink_score = 1.0
+    elif min_ear < 0.40 and max_ear > 0.42:
+        blink_score = 0.5  # Almost a blink
+    elif min_ear < 0.42:
+        blink_score = 0.3  # Partial closure detected
+    else:
+        blink_score = 0.0  # No closure detected
+    
+    print(f"[BLINK] Processed {len(ear_values)} frames. EAR range: {min_ear:.3f} - {max_ear:.3f}, Current: {current_ear:.3f}, Blinked: {has_blinked}")
     
     return {
         "has_blinked": has_blinked,
         "blink_score": blink_score,
         "frames_processed": len(ear_values),
         "min_ear": min_ear,
+        "max_ear": max_ear,
+        "current_ear": current_ear,
         "blinks_needed": 0 if has_blinked else 1,
+        "threshold": EAR_THRESHOLD,  # Expose threshold for frontend debug display
     }
 
 
@@ -333,37 +348,45 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     liveness_status = "Unknown"
     identity_to_mark = None  # Track who to mark attendance for
     
-    # Smart blink processing: Only process when needed
-    should_process_blink = False
+    # Determine if blink is REQUIRED (for attendance) vs just for debug
+    blink_required = False
     
     if matched:
         if attendance_logger.has_checked_in_today(matched):
-            # User already checked in today - skip blink, instant Real
+            # User already checked in today - skip blink requirement, instant Real
             liveness_status = "Real"
-            blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+            blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0, "min_ear": None, "max_ear": None, "current_ear": None, "threshold": 0.25}
             print(f"[VERIFY] User '{matched}' already checked in today. Skipping blink detection.")
         else:
-            # User matched but not checked in - need blink verification
-            should_process_blink = True
+            # User matched but not checked in - REQUIRE blink verification
+            blink_required = True
     else:
-        # User not matched - don't reveal anything, skip blink (waste of processing)
-        liveness_status = "Real"  # No security concern for unknown users
-        blink_details = {"has_blinked": False, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0}
+        # User not matched - don't require blink for security, but still process for debug
+        # We'll process blink below for debug visualization
+        pass
     
-    if should_process_blink and request.blink_sequence:
+    # ALWAYS process blink if we have frames (for debug visualization)
+    if request.blink_sequence and blink_details is None:
         frames = [_decode_base64_image(b64) for b64 in request.blink_sequence]
         blink_details = _process_blink_sequence(frames)
-        liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
-        print(f"[DEBUG] Blink processed: score={blink_details['blink_score']}, liveness={liveness_status}, matched={matched}")
+        print(f"[DEBUG] Blink processed: score={blink_details['blink_score']}, matched={matched}, blink_required={blink_required}")
         
-        # If blink passed AND user matched, mark for attendance
-        if liveness_status == "Real":
-            identity_to_mark = matched
-            print(f"[DEBUG] Set identity_to_mark = {identity_to_mark}")
-    elif should_process_blink:
+        # Determine liveness status based on whether blink was required
+        if blink_required:
+            # User is matched and hasn't checked in - REQUIRE blink
+            liveness_status = "Real" if blink_details["blink_score"] >= 0.5 else "Spoof"
+            if liveness_status == "Real":
+                identity_to_mark = matched
+                print(f"[DEBUG] Set identity_to_mark = {identity_to_mark}")
+        else:
+            # User not matched - show EAR debug but don't require blink for security
+            # Liveness is "Real" (no security concern), but still set blinks_needed for UI feedback
+            liveness_status = "Real"
+            # Keep blinks_needed from the actual detection for debug purposes
+    elif blink_required and blink_details is None:
         # Need blink but no sequence provided yet
         liveness_status = "Spoof"
-        blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1}
+        blink_details = {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "blinks_needed": 1, "min_ear": None, "max_ear": None, "current_ear": None, "threshold": 0.25}
     
     # Mark attendance BEFORE nullifying matched (for blink pass case)
     print(f"[DEBUG] Checking attendance: identity_to_mark={identity_to_mark}, mark_attendance={request.mark_attendance}")
@@ -443,6 +466,25 @@ def delete_employee(name: str) -> Dict[str, Any]:
     
     print(f"[DELETE] Removed employee '{name}'")
     return {"success": True, "name": name, "remaining": len(EMPLOYEE_DB)}
+
+
+@app.post("/liveness/reset")
+def reset_liveness_cache(employee_name: str = None) -> Dict[str, Any]:
+    """
+    Reset the liveness/attendance cache for testing or multi-user scenarios.
+    
+    Args:
+        employee_name: Optional - reset only this employee. If None, reset all.
+    
+    Returns:
+        Success status and count of cleared entries.
+    """
+    success, message, count = attendance_logger.reset_liveness_cache(employee_name)
+    return {
+        "success": success,
+        "message": message,
+        "cleared_count": count
+    }
 
 
 @app.post("/pose/validate")

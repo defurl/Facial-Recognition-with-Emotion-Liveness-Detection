@@ -105,6 +105,30 @@ class AttendanceLogger:
         # Simple check:
         return employee_name in self.today_attendees
 
+    def reset_liveness_cache(self, employee_name: str = None):
+        """
+        Reset the liveness/attendance cache for testing or multi-user scenarios.
+        
+        Args:
+            employee_name: Optional - reset only this employee. If None, reset all.
+        
+        Returns:
+            tuple: (success: bool, message: str, count: int)
+        """
+        with self.lock:
+            if employee_name:
+                if employee_name in self.today_attendees:
+                    self.today_attendees.discard(employee_name)
+                    print(f"[LIVENESS] Reset cache for '{employee_name}'")
+                    return (True, f"Cache cleared for {employee_name}", 1)
+                else:
+                    return (False, f"'{employee_name}' not in cache", 0)
+            else:
+                count = len(self.today_attendees)
+                self.today_attendees.clear()
+                print(f"[LIVENESS] Reset all cache - {count} users cleared")
+                return (True, f"Cleared {count} users from cache", count)
+
     def can_mark_attendance(self, employee_name):
         """
         Check if employee can mark attendance (cooldown expired).
@@ -149,6 +173,13 @@ class AttendanceLogger:
                 # Check cooldown
                 can_mark, reason = self.can_mark_attendance(employee_name)
                 print(f"[ATTENDANCE] can_mark_attendance: {can_mark}, reason: {reason}")
+                
+                # ALWAYS add to today_attendees for liveness bypass, even if cooldown prevents CSV write
+                # This ensures user doesn't need to blink again within the same day
+                if employee_name not in self.today_attendees:
+                    self.today_attendees.add(employee_name)
+                    print(f"[ATTENDANCE] Added '{employee_name}' to today_attendees (liveness cache)")
+                
                 if not can_mark:
                     return (False, reason)
             

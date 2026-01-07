@@ -118,3 +118,17 @@ export async function validatePose(
   });
   return handleResponse(res);
 }
+
+export interface ResetLivenessResponse {
+  success: boolean;
+  message: string;
+  cleared_count: number;
+}
+
+export async function resetLivenessCache(employeeName?: string): Promise<ResetLivenessResponse> {
+  const params = employeeName ? `?employee_name=${encodeURIComponent(employeeName)}` : "";
+  const res = await fetch(`${BASE_URL}/liveness/reset${params}`, {
+    method: "POST",
+  });
+  return handleResponse(res);
+}
