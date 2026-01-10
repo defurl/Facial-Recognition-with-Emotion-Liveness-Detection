@@ -123,6 +123,56 @@ TSNE_PERPLEXITY = 30  # t-SNE perplexity parameter
 TRACK_EMBEDDING_DRIFT = True  # Track embedding changes over time
 DRIFT_WARNING_THRESHOLD = 0.3  # Cosine distance threshold for drift warning
 
+# ============= Multi-Task Learning (MTL) Settings =============
+# Model Architecture
+MTL_EMBEDDING_DIM = 256
+MTL_NUM_IDENTITIES = 4000  # VGGFace2 subset
+MTL_NUM_EMOTIONS = 7       # RAF-DB: surprise, fear, disgust, happy, sad, angry, neutral
+MTL_NUM_LIVENESS = 2       # Binary: live vs spoof
+
+# Dataset Paths
+MTL_EMOTION_DIR = BASE_DIR / "dataset" / "emotion"    # RAF-DB
+MTL_LIVENESS_DIR = BASE_DIR / "dataset" / "liveness"  # CelebA-Spoof
+MTL_OUTPUT_DIR = OUTPUT_DIR / "mtl"
+MTL_CHECKPOINT_DIR = MTL_OUTPUT_DIR / "checkpoints"
+
+# Training Hyperparameters
+MTL_BATCH_SIZE_EMOTION = 64
+MTL_BATCH_SIZE_LIVENESS = 128
+MTL_BATCH_SIZE_JOINT = 32
+MTL_LEARNING_RATE = 1e-3
+MTL_LEARNING_RATE_JOINT = 1e-4
+MTL_WEIGHT_DECAY = 1e-4
+MTL_WARMUP_EPOCHS = 5
+MTL_GRADIENT_CLIP = 1.0
+MTL_ACCUMULATION_STEPS = 4
+
+# Training Phase Configuration
+MTL_EPOCHS_EMOTION = 50    # Phase A: Emotion head training
+MTL_EPOCHS_LIVENESS = 30   # Phase B: Liveness head training
+MTL_EPOCHS_JOINT = 100     # Phase C: Joint fine-tuning
+
+# Loss Weights (initial, will be learned with uncertainty weighting)
+MTL_LOSS_WEIGHT_FACE = 0.5
+MTL_LOSS_WEIGHT_EMOTION = 0.3
+MTL_LOSS_WEIGHT_LIVENESS = 0.2
+
+# Early Stopping
+MTL_PATIENCE = 10
+MTL_MIN_DELTA = 1e-4
+
+# Mixed Precision Training
+MTL_USE_AMP = True
+
+# Emotion Labels (RAF-DB mapping: folder 1-7 → class 0-6)
+MTL_EMOTION_NAMES = ['surprise', 'fear', 'disgust', 'happy', 'sad', 'angry', 'neutral']
+
+# Unified Model Paths
+MODEL_MTL_PATH = MTL_OUTPUT_DIR / "unified_model.pth"
+MODEL_MTL_EMOTION_PATH = MTL_CHECKPOINT_DIR / "emotion_best.pth"
+MODEL_MTL_LIVENESS_PATH = MTL_CHECKPOINT_DIR / "liveness_best.pth"
+MODEL_MTL_JOINT_PATH = MTL_CHECKPOINT_DIR / "joint_best.pth"
+
 # ============= Image Normalization =============
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

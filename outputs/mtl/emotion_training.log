@@ -1,0 +1,253 @@
+nohup: ignoring input
+/home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/artifacts/scripts/train_mtl.py:602: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler() if config.USE_AMP else None
+
+============================================================
+MTL Training - Phase: EMOTION
+============================================================
+
+Device: cuda
+Tasks: ['emotion']
+Epochs: 50
+Learning Rate: 0.001
+Batch Size: 64
+Freeze Backbone: True
+
+Backbone frozen
+Trainable parameters: 1,161,769
+EmotionDataset (train): 12271 samples
+EmotionDataset (test): 3068 samples
+Train batches: 191
+Val batches: 24
+
+Starting training from epoch 1...
+------------------------------------------------------------
+/home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/artifacts/scripts/train_mtl.py:247: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with autocast():
+Epoch 1/50 (25.9s)
+  Train - Loss: 1.8654, Acc: 0.2711
+  Val   - Loss: 1.7328, Acc: 0.3879
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 2/50 (25.0s)
+  Train - Loss: 1.7595, Acc: 0.3523
+  Val   - Loss: 1.6744, Acc: 0.3915
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 3/50 (24.5s)
+  Train - Loss: 1.7010, Acc: 0.3830
+  Val   - Loss: 1.6544, Acc: 0.4009
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 4/50 (24.7s)
+  Train - Loss: 1.6829, Acc: 0.3968
+  Val   - Loss: 1.6585, Acc: 0.4065
+
+Epoch 5/50 (24.6s)
+  Train - Loss: 1.6696, Acc: 0.3991
+  Val   - Loss: 1.6374, Acc: 0.4081
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 6/50 (24.6s)
+  Train - Loss: 1.6586, Acc: 0.4095
+  Val   - Loss: 1.6382, Acc: 0.4068
+
+Epoch 7/50 (24.7s)
+  Train - Loss: 1.6523, Acc: 0.4118
+  Val   - Loss: 1.6248, Acc: 0.4172
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 8/50 (24.7s)
+  Train - Loss: 1.6494, Acc: 0.4144
+  Val   - Loss: 1.6202, Acc: 0.4205
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 9/50 (24.6s)
+  Train - Loss: 1.6428, Acc: 0.4175
+  Val   - Loss: 1.6226, Acc: 0.4254
+
+Epoch 10/50 (24.5s)
+  Train - Loss: 1.6411, Acc: 0.4162
+  Val   - Loss: 1.6216, Acc: 0.4198
+
+Epoch 11/50 (24.7s)
+  Train - Loss: 1.6365, Acc: 0.4104
+  Val   - Loss: 1.6115, Acc: 0.4250
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 12/50 (24.6s)
+  Train - Loss: 1.6325, Acc: 0.4217
+  Val   - Loss: 1.6054, Acc: 0.4260
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 13/50 (24.6s)
+  Train - Loss: 1.6304, Acc: 0.4215
+  Val   - Loss: 1.6072, Acc: 0.4342
+
+Epoch 14/50 (44.0s)
+  Train - Loss: 1.6298, Acc: 0.4224
+  Val   - Loss: 1.6049, Acc: 0.4270
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 15/50 (48.3s)
+  Train - Loss: 1.6262, Acc: 0.4276
+  Val   - Loss: 1.6026, Acc: 0.4335
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 16/50 (49.3s)
+  Train - Loss: 1.6208, Acc: 0.4241
+  Val   - Loss: 1.6083, Acc: 0.4260
+
+Epoch 17/50 (47.7s)
+  Train - Loss: 1.6260, Acc: 0.4248
+  Val   - Loss: 1.6030, Acc: 0.4289
+
+Epoch 18/50 (49.6s)
+  Train - Loss: 1.6228, Acc: 0.4254
+  Val   - Loss: 1.6001, Acc: 0.4413
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 19/50 (49.9s)
+  Train - Loss: 1.6175, Acc: 0.4237
+  Val   - Loss: 1.6045, Acc: 0.4351
+
+Epoch 20/50 (48.8s)
+  Train - Loss: 1.6178, Acc: 0.4280
+  Val   - Loss: 1.5969, Acc: 0.4390
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 21/50 (49.4s)
+  Train - Loss: 1.6152, Acc: 0.4314
+  Val   - Loss: 1.5947, Acc: 0.4384
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 22/50 (49.4s)
+  Train - Loss: 1.6147, Acc: 0.4321
+  Val   - Loss: 1.6038, Acc: 0.4306
+
+Epoch 23/50 (48.4s)
+  Train - Loss: 1.6127, Acc: 0.4301
+  Val   - Loss: 1.5934, Acc: 0.4390
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 24/50 (49.0s)
+  Train - Loss: 1.6107, Acc: 0.4328
+  Val   - Loss: 1.5961, Acc: 0.4338
+
+Epoch 25/50 (49.6s)
+  Train - Loss: 1.6087, Acc: 0.4340
+  Val   - Loss: 1.5915, Acc: 0.4413
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 26/50 (49.0s)
+  Train - Loss: 1.6083, Acc: 0.4374
+  Val   - Loss: 1.5915, Acc: 0.4400
+
+Epoch 27/50 (50.3s)
+  Train - Loss: 1.6069, Acc: 0.4310
+  Val   - Loss: 1.5857, Acc: 0.4387
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 28/50 (50.0s)
+  Train - Loss: 1.6078, Acc: 0.4320
+  Val   - Loss: 1.5826, Acc: 0.4446
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 29/50 (48.4s)
+  Train - Loss: 1.6037, Acc: 0.4379
+  Val   - Loss: 1.5874, Acc: 0.4430
+
+Epoch 30/50 (49.3s)
+  Train - Loss: 1.6045, Acc: 0.4292
+  Val   - Loss: 1.5887, Acc: 0.4417
+
+Epoch 31/50 (44.2s)
+  Train - Loss: 1.6028, Acc: 0.4343
+  Val   - Loss: 1.5814, Acc: 0.4443
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 32/50 (43.5s)
+  Train - Loss: 1.6019, Acc: 0.4334
+  Val   - Loss: 1.5846, Acc: 0.4436
+
+Epoch 33/50 (44.5s)
+  Train - Loss: 1.6053, Acc: 0.4328
+  Val   - Loss: 1.5821, Acc: 0.4417
+
+Epoch 34/50 (44.5s)
+  Train - Loss: 1.5980, Acc: 0.4399
+  Val   - Loss: 1.5824, Acc: 0.4436
+
+Epoch 35/50 (43.4s)
+  Train - Loss: 1.5992, Acc: 0.4415
+  Val   - Loss: 1.5835, Acc: 0.4410
+
+Epoch 36/50 (38.6s)
+  Train - Loss: 1.5962, Acc: 0.4409
+  Val   - Loss: 1.5747, Acc: 0.4485
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 37/50 (22.4s)
+  Train - Loss: 1.5979, Acc: 0.4380
+  Val   - Loss: 1.5828, Acc: 0.4404
+
+Epoch 38/50 (22.4s)
+  Train - Loss: 1.5935, Acc: 0.4406
+  Val   - Loss: 1.5775, Acc: 0.4495
+
+Epoch 39/50 (22.5s)
+  Train - Loss: 1.5943, Acc: 0.4361
+  Val   - Loss: 1.5787, Acc: 0.4436
+
+Epoch 40/50 (22.5s)
+  Train - Loss: 1.5929, Acc: 0.4425
+  Val   - Loss: 1.5776, Acc: 0.4433
+
+Epoch 41/50 (22.5s)
+  Train - Loss: 1.5910, Acc: 0.4427
+  Val   - Loss: 1.5761, Acc: 0.4465
+
+Epoch 42/50 (22.5s)
+  Train - Loss: 1.5910, Acc: 0.4451
+  Val   - Loss: 1.5774, Acc: 0.4465
+
+Epoch 43/50 (22.5s)
+  Train - Loss: 1.5914, Acc: 0.4441
+  Val   - Loss: 1.5758, Acc: 0.4514
+
+Epoch 44/50 (22.5s)
+  Train - Loss: 1.5931, Acc: 0.4400
+  Val   - Loss: 1.5730, Acc: 0.4492
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 45/50 (22.6s)
+  Train - Loss: 1.5925, Acc: 0.4490
+  Val   - Loss: 1.5742, Acc: 0.4472
+
+Epoch 46/50 (22.5s)
+  Train - Loss: 1.5904, Acc: 0.4432
+  Val   - Loss: 1.5760, Acc: 0.4478
+
+Epoch 47/50 (22.5s)
+  Train - Loss: 1.5921, Acc: 0.4418
+  Val   - Loss: 1.5759, Acc: 0.4462
+
+Epoch 48/50 (22.4s)
+  Train - Loss: 1.5914, Acc: 0.4428
+  Val   - Loss: 1.5760, Acc: 0.4459
+
+Epoch 49/50 (22.4s)
+  Train - Loss: 1.5916, Acc: 0.4467
+  Val   - Loss: 1.5732, Acc: 0.4485
+
+Epoch 50/50 (22.6s)
+  Train - Loss: 1.5886, Acc: 0.4440
+  Val   - Loss: 1.5757, Acc: 0.4462
+
+
+============================================================
+Training Complete!
+Best validation loss: 1.5730
+History saved to: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/emotion_history.json
+Best model saved to: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+============================================================

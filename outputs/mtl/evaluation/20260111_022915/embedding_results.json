@@ -1,0 +1,10 @@
+{
+  "embedding_dim": 256,
+  "num_samples": 3068,
+  "embedding_norm_mean": 1.0,
+  "embedding_norm_std": 3.63969867578362e-08,
+  "intra_class_distance_mean": 0.1263273424458595,
+  "intra_class_distance_std": 0.07513194990410625,
+  "inter_class_distance_mean": 0.13850429997527433,
+  "inter_class_distance_std": 0.08063398722273228
+}
