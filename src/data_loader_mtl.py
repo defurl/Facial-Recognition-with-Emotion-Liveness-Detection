@@ -186,6 +186,85 @@ class EmotionDataset(Dataset):
         label = EMOTION_MAP.get(int(row['label']), int(row['label']) - 1)
         
         return image, label
+    
+    def get_labels(self) -> List[int]:
+        """Get all labels for computing class weights."""
+        return [EMOTION_MAP.get(int(row['label']), int(row['label']) - 1) 
+                for _, row in self.df.iterrows()]
+    
+    def get_class_counts(self) -> Dict[int, int]:
+        """Get count of samples per class."""
+        labels = self.get_labels()
+        counts = {}
+        for label in labels:
+            counts[label] = counts.get(label, 0) + 1
+        return counts
+
+
+def compute_emotion_class_weights(dataset: EmotionDataset, num_classes: int = 7) -> torch.Tensor:
+    """
+    Compute inverse frequency class weights for balanced training.
+    
+    Args:
+        dataset: EmotionDataset instance
+        num_classes: Number of emotion classes
+    
+    Returns:
+        Tensor of class weights (higher weight for minority classes)
+    """
+    counts = dataset.get_class_counts()
+    total = sum(counts.values())
+    
+    # Inverse frequency weighting: weight = total / (num_classes * count)
+    weights = []
+    for i in range(num_classes):
+        count = counts.get(i, 1)  # Avoid division by zero
+        weight = total / (num_classes * count)
+        weights.append(weight)
+    
+    weights = torch.tensor(weights, dtype=torch.float32)
+    
+    # Normalize so max weight = 1.0 for stability
+    # weights = weights / weights.max()
+    
+    print(f"Emotion class weights: {dict(zip(EMOTION_NAMES, weights.tolist()))}")
+    return weights
+
+
+def create_emotion_sampler(dataset: EmotionDataset) -> WeightedRandomSampler:
+    """
+    Create a WeightedRandomSampler for balanced emotion training.
+    
+    Each sample gets a weight based on its class frequency.
+    This ensures minority classes are sampled more frequently.
+    
+    Args:
+        dataset: EmotionDataset instance
+    
+    Returns:
+        WeightedRandomSampler for the DataLoader
+    """
+    labels = dataset.get_labels()
+    class_counts = dataset.get_class_counts()
+    
+    # Compute weight for each sample
+    sample_weights = []
+    for label in labels:
+        count = class_counts.get(label, 1)
+        weight = 1.0 / count  # Inverse frequency
+        sample_weights.append(weight)
+    
+    sample_weights = torch.tensor(sample_weights, dtype=torch.float32)
+    
+    # Create sampler
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+    
+    print(f"Created WeightedRandomSampler with {len(sample_weights)} samples")
+    return sampler
 
 
 # ============= Liveness Dataset (CelebA-Spoof) =============
@@ -242,9 +321,10 @@ class LivenessDataset(Dataset):
     
     def _find_data_dir(self) -> Optional[Path]:
         """Find the data directory in various possible structures."""
-        # Try common structures
+        # Try common structures (prioritize improved_synthetic over synthetic)
         candidates = [
-            self.root_dir / 'synthetic' / self.split,  # Our synthetic dataset
+            self.root_dir / 'improved_synthetic' / self.split,  # Improved synthetic (preferred)
+            self.root_dir / 'synthetic' / self.split,  # Original synthetic dataset
             self.root_dir / 'CelebA_Spoof' / 'Data' / self.split,
             self.root_dir / 'CelebA_Spoof_' / 'Data' / self.split,
             self.root_dir / 'Data' / self.split,

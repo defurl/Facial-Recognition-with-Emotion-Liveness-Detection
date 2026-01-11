@@ -59,6 +59,7 @@ from losses_mtl import MTLLoss, FocalLoss, LabelSmoothingCrossEntropy
 from data_loader_mtl import (
     EmotionDataset, LivenessDataset, 
     create_mtl_dataloaders, get_mtl_transforms,
+    create_emotion_sampler,
     EMOTION_DIR, LIVENESS_DIR
 )
 from config import DEVICE, BASE_DIR
@@ -536,24 +537,35 @@ def train_phase(
     # Create data loaders
     train_tf, val_tf = get_mtl_transforms(augment=True)
     
+    # Initialize sampler (for balanced training)
+    train_sampler = None
+    
     if phase == 'emotion':
         train_ds = EmotionDataset(EMOTION_DIR, split='train', transform=train_tf)
         val_ds = EmotionDataset(EMOTION_DIR, split='test', transform=val_tf)
+        
+        # Use WeightedRandomSampler for balanced training
+        # (This is preferred over class weights in loss - using both is too aggressive)
+        train_sampler = create_emotion_sampler(train_ds)
+        print("Using WeightedRandomSampler for balanced emotion training")
+        
     elif phase == 'liveness':
         train_ds = LivenessDataset(LIVENESS_DIR, split='train', transform=train_tf)
         val_ds = LivenessDataset(LIVENESS_DIR, split='test', transform=val_tf)
     else:  # joint
         # For joint training, we need to combine datasets
-        # This is simplified - actual implementation would use MultiTaskDataset
         train_ds = EmotionDataset(EMOTION_DIR, split='train', transform=train_tf)
         val_ds = EmotionDataset(EMOTION_DIR, split='test', transform=val_tf)
+        train_sampler = create_emotion_sampler(train_ds)
         print("Note: Joint training currently uses emotion dataset only")
         print("      Full MTL training requires LivenessDataset (CelebA-Spoof)")
     
+    # Use sampler for emotion, shuffle for others
     train_loader = DataLoader(
         train_ds,
         batch_size=phase_config['batch_size'],
-        shuffle=True,
+        shuffle=(train_sampler is None),  # Don't shuffle if using sampler
+        sampler=train_sampler,
         num_workers=4,
         pin_memory=True,
         drop_last=True,
@@ -570,7 +582,8 @@ def train_phase(
     print(f"Train batches: {len(train_loader)}")
     print(f"Val batches: {len(val_loader)}")
     
-    # Create loss function
+    # Create loss function (class weights disabled - using sampler instead)
+    # Note: Using BOTH sampler AND class weights is too aggressive and collapses validation
     criterion = MTLLoss(
         face_weight=config.LOSS_WEIGHTS['face'],
         emotion_weight=config.LOSS_WEIGHTS['emotion'],

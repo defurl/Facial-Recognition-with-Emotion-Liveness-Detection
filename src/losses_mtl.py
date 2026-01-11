@@ -8,8 +8,6 @@ This module provides:
 4. GradNormLoss - gradient-based dynamic loss balancing
 5. MTLLoss - unified multi-task loss wrapper
 
-Author: MTL Implementation
-Date: January 2026
 """
 
 import torch
@@ -78,19 +76,26 @@ class FocalLoss(nn.Module):
 
 class LabelSmoothingCrossEntropy(nn.Module):
     """
-    Cross-entropy loss with label smoothing.
+    Cross-entropy loss with label smoothing and optional class weights.
     
     Instead of hard labels (0, 1), uses soft labels:
     - Target class: 1 - smoothing
     - Other classes: smoothing / (num_classes - 1)
     
     This prevents overconfidence and improves generalization.
+    Supports class weights for imbalanced datasets.
     """
     
-    def __init__(self, smoothing: float = 0.1, reduction: str = 'mean'):
+    def __init__(
+        self, 
+        smoothing: float = 0.1, 
+        reduction: str = 'mean',
+        weight: Optional[torch.Tensor] = None
+    ):
         super(LabelSmoothingCrossEntropy, self).__init__()
         self.smoothing = smoothing
         self.reduction = reduction
+        self.register_buffer('weight', weight)
     
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -113,6 +118,11 @@ class LabelSmoothingCrossEntropy(nn.Module):
             smooth_labels.scatter_(1, targets.unsqueeze(1), 1.0 - self.smoothing)
         
         loss = (-smooth_labels * log_probs).sum(dim=-1)
+        
+        # Apply class weights if provided
+        if self.weight is not None:
+            sample_weights = self.weight[targets]
+            loss = loss * sample_weights
         
         if self.reduction == 'mean':
             return loss.mean()
@@ -228,7 +238,7 @@ class MTLLoss(nn.Module):
     
     Combines:
     - Face: Triplet loss or ArcFace (depending on mode)
-    - Emotion: Label-smoothed cross-entropy
+    - Emotion: Label-smoothed cross-entropy with class weights
     - Liveness: Focal loss (for class imbalance)
     
     With configurable weighting strategy.
@@ -246,6 +256,7 @@ class MTLLoss(nn.Module):
         emotion_smoothing: float = 0.1,
         focal_gamma: float = 2.0,
         liveness_class_weights: Optional[torch.Tensor] = None,
+        emotion_class_weights: Optional[torch.Tensor] = None,  # NEW: class weights for emotion
         
         # Weighting strategy
         use_uncertainty_weighting: bool = False,
@@ -258,7 +269,11 @@ class MTLLoss(nn.Module):
         self.triplet_loss = nn.TripletMarginLoss(margin=triplet_margin, p=2)
         self.face_ce_loss = nn.CrossEntropyLoss()  # For ArcFace/softmax
         
-        self.emotion_loss = LabelSmoothingCrossEntropy(smoothing=emotion_smoothing)
+        # Emotion loss with class weights for imbalanced dataset
+        self.emotion_loss = LabelSmoothingCrossEntropy(
+            smoothing=emotion_smoothing,
+            weight=emotion_class_weights
+        )
         
         self.liveness_loss = FocalLoss(
             alpha=liveness_class_weights,

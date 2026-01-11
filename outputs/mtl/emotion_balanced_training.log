@@ -1,0 +1,70 @@
+nohup: ignoring input
+/home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/artifacts/scripts/train_mtl.py:620: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler() if config.USE_AMP else None
+
+============================================================
+MTL Training - Phase: EMOTION
+============================================================
+
+Device: cuda
+Tasks: ['emotion']
+Epochs: 50
+Learning Rate: 0.001
+Batch Size: 64
+Freeze Backbone: True
+
+Backbone frozen
+Trainable parameters: 1,161,769
+EmotionDataset (train): 12271 samples
+EmotionDataset (test): 3068 samples
+Emotion class weights: {'surprise': 1.3589147329330444, 'fear': 6.238434314727783, 'disgust': 2.4449093341827393, 'happy': 0.3673512041568756, 'sad': 0.8844601511955261, 'angry': 2.486524820327759, 'neutral': 0.6945325136184692}
+Created WeightedRandomSampler with 12271 samples
+Using WeightedRandomSampler for balanced emotion training
+Train batches: 191
+Val batches: 24
+
+Starting training from epoch 1...
+------------------------------------------------------------
+/home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/artifacts/scripts/train_mtl.py:248: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with autocast():
+Epoch 1/50 (22.8s)
+  Train - Loss: 4.3414, Acc: 0.1593
+  Val   - Loss: 1.9066, Acc: 0.1786
+  → Saved new best model: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/mtl/checkpoints/emotion_best.pth
+
+Epoch 2/50 (21.6s)
+  Train - Loss: 3.6699, Acc: 0.1949
+  Val   - Loss: 1.9626, Acc: 0.0665
+
+Epoch 3/50 (21.6s)
+  Train - Loss: 3.3823, Acc: 0.1993
+  Val   - Loss: 2.0906, Acc: 0.0469
+
+Epoch 4/50 (21.7s)
+  Train - Loss: 3.3424, Acc: 0.1899
+  Val   - Loss: 2.0959, Acc: 0.0600
+
+Epoch 5/50 (21.6s)
+  Train - Loss: 3.3028, Acc: 0.1918
+  Val   - Loss: 2.0546, Acc: 0.0453
+
+Epoch 6/50 (21.6s)
+  Train - Loss: 3.2703, Acc: 0.1992
+  Val   - Loss: 2.0943, Acc: 0.0453
+
+Epoch 7/50 (21.6s)
+  Train - Loss: 3.2375, Acc: 0.1950
+  Val   - Loss: 2.0425, Acc: 0.0580
+
+Epoch 8/50 (21.6s)
+  Train - Loss: 3.2350, Acc: 0.2081
+  Val   - Loss: 2.0765, Acc: 0.0411
+
+Epoch 9/50 (21.7s)
+  Train - Loss: 3.2360, Acc: 0.2027
+  Val   - Loss: 1.9886, Acc: 0.0626
+
+Epoch 10/50 (21.8s)
+  Train - Loss: 3.2292, Acc: 0.2012
+  Val   - Loss: 2.0274, Acc: 0.0424
+
