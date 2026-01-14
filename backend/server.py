@@ -63,8 +63,14 @@ EMPLOYEE_OFFSETS: List = []
 THRESHOLD_VALUE: float = OPTIMAL_THRESHOLD_GUI
 LAST_DB_MTIME: float = 0.0  # Track database modification time
 
+# Face change detection: Store last verified embedding to detect when a different person appears
+LAST_VERIFIED_EMBEDDING: Optional[torch.Tensor] = None
+LAST_VERIFIED_IDENTITY: Optional[str] = None
+FACE_CHANGE_THRESHOLD: float = 0.6  # If embedding distance > this, it's a different face
+
 FACE_MESH_LOCK = threading.Lock()
 MODEL_LOCK = threading.Lock()
+EMBEDDING_LOCK = threading.Lock()  # Lock for last embedding state
 
 # Attendance logger ensures we continue writing to the artifacts log
 attendance_logger = AttendanceLogger(csv_path=OUTPUT_DIR / "attendance_log.csv")
@@ -178,18 +184,22 @@ def _prepare_embedding(face_crop: np.ndarray) -> torch.Tensor:
 
 def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     """
-    Optimized blink detection using frame subsampling and EAR variance.
-    Instead of detecting a full blink cycle, we detect EAR variance (min vs max).
+    Blink detection using BlinkDetector class for consistency with desktop.
+    Uses Euclidean EAR calculation and 0.5 threshold from BlinkDetector.
     """
     if not frames:
         return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
     
-    # Subsample: Take 5 evenly spaced frames for speed
-    num_samples = min(5, len(frames))
+    # Create a fresh BlinkDetector with desktop-matching threshold (0.5)
+    blink_detector = BlinkDetector(ear_threshold=0.5)
+    
+    # Subsample: Take up to 8 evenly spaced frames for speed
+    num_samples = min(8, len(frames))
     step = max(1, len(frames) // num_samples)
     sampled_frames = [frames[i] for i in range(0, len(frames), step)][:num_samples]
     
     ear_values = []
+    blink_detected_any = False
     
     for frame in sampled_frames:
         if frame is None:
@@ -201,22 +211,15 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
             if not result or not result.multi_face_landmarks:
                 continue
             
-            # Quick EAR calculation (inline for speed)
-            landmarks = result.multi_face_landmarks[0].landmark
-            # Left eye EAR
-            left_v1 = abs(landmarks[159].y - landmarks[23].y)  # top-bottom outer
-            left_v2 = abs(landmarks[145].y - landmarks[130].y)  # top-bottom inner
-            left_h = abs(landmarks[33].x - landmarks[133].x)   # outer-inner corner
-            left_ear = (left_v1 + left_v2) / (2.0 * left_h) if left_h > 0.001 else 0
+            landmarks = result.multi_face_landmarks[0]
             
-            # Right eye EAR
-            right_v1 = abs(landmarks[386].y - landmarks[253].y)
-            right_v2 = abs(landmarks[374].y - landmarks[260].y)
-            right_h = abs(landmarks[362].x - landmarks[263].x)
-            right_ear = (right_v1 + right_v2) / (2.0 * right_h) if right_h > 0.001 else 0
+            # Use BlinkDetector's proper Euclidean EAR calculation
+            blink_detected, current_ear, _ = blink_detector.detect_blink(landmarks)
+            ear_values.append(current_ear)
             
-            avg_ear = (left_ear + right_ear) / 2.0
-            ear_values.append(avg_ear)
+            if blink_detected:
+                blink_detected_any = True
+                
         except Exception as e:
             print(f"[BLINK] Frame processing error: {e}")
             continue
@@ -226,36 +229,37 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     
     min_ear = min(ear_values)
     max_ear = max(ear_values)
-    current_ear = ear_values[-1]  # Most recent EAR for live display
+    current_ear = ear_values[-1]
     
-    # Blink detection: Require ACTUAL eye closure, not just variance
-    # - min_ear < 0.35: Eyes must have actually closed (adjusted for typical EAR values)
-    # - max_ear > 0.45: Eyes must have been open at some point (proves transition)
-    # This prevents passing when user is simply still with eyes open
-    EAR_THRESHOLD = 0.35
-    has_blinked = min_ear < EAR_THRESHOLD and max_ear > 0.45
+    # Unified threshold with desktop
+    EAR_THRESHOLD = 0.5
     
-    # Blink score: 1.0 if definite blink, partial score if close to threshold
+    # If BlinkDetector detected a proper blink cycle (with duration validation), use that
+    # Otherwise, use variance-based heuristic as fallback
+    has_blinked = blink_detected_any or (min_ear < EAR_THRESHOLD and max_ear > 0.55)
+    
+    # Blink score
     if has_blinked:
         blink_score = 1.0
-    elif min_ear < 0.40 and max_ear > 0.42:
+    elif min_ear < 0.45 and max_ear > 0.50:
         blink_score = 0.5  # Almost a blink
-    elif min_ear < 0.42:
-        blink_score = 0.3  # Partial closure detected
+    elif min_ear < 0.48:
+        blink_score = 0.3  # Partial closure
     else:
-        blink_score = 0.0  # No closure detected
+        blink_score = 0.0
     
-    print(f"[BLINK] Processed {len(ear_values)} frames. EAR range: {min_ear:.3f} - {max_ear:.3f}, Current: {current_ear:.3f}, Blinked: {has_blinked}")
+    print(f"[BLINK] Processed {len(ear_values)} frames. EAR: {min_ear:.3f}-{max_ear:.3f}, Blinked: {has_blinked}")
     
+    # Convert numpy types to Python native types for Pydantic serialization
     return {
-        "has_blinked": has_blinked,
-        "blink_score": blink_score,
+        "has_blinked": bool(has_blinked),
+        "blink_score": float(blink_score),
         "frames_processed": len(ear_values),
-        "min_ear": min_ear,
-        "max_ear": max_ear,
-        "current_ear": current_ear,
+        "min_ear": float(min_ear),
+        "max_ear": float(max_ear),
+        "current_ear": float(current_ear),
         "blinks_needed": 0 if has_blinked else 1,
-        "threshold": EAR_THRESHOLD,  # Expose threshold for frontend debug display
+        "threshold": float(EAR_THRESHOLD),
     }
 
 
@@ -344,6 +348,24 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     
     print(f"[VERIFY] Result: Best match '{best_name}' with distance {min_distance:.4f} (Threshold: {threshold}). Matched: {matched}")
 
+    # Face change detection: check if current face is different from last verified
+    global LAST_VERIFIED_EMBEDDING, LAST_VERIFIED_IDENTITY
+    face_changed = False
+    
+    with EMBEDDING_LOCK:
+        if LAST_VERIFIED_EMBEDDING is not None and matched:
+            # Compare current embedding with last verified
+            emb_distance = torch.cdist(embedding, LAST_VERIFIED_EMBEDDING, p=2)[0, 0].item()
+            if emb_distance > FACE_CHANGE_THRESHOLD:
+                face_changed = True
+                print(f"[FACE-CHANGE] Detected new face! Embedding distance: {emb_distance:.4f} > {FACE_CHANGE_THRESHOLD}")
+                # Reset cache for the previous identity to force blink re-verification
+                if LAST_VERIFIED_IDENTITY:
+                    attendance_logger.reset_liveness_cache(LAST_VERIFIED_IDENTITY)
+                    print(f"[FACE-CHANGE] Reset cache for '{LAST_VERIFIED_IDENTITY}'")
+                LAST_VERIFIED_EMBEDDING = None
+                LAST_VERIFIED_IDENTITY = None
+
     blink_details = None
     liveness_status = "Unknown"
     identity_to_mark = None  # Track who to mark attendance for
@@ -393,6 +415,12 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     if identity_to_mark and request.mark_attendance:
         print(f"[ATTENDANCE] Marking attendance for {identity_to_mark} after blink verification")
         background_tasks.add_task(attendance_logger.mark_attendance, identity_to_mark, min_distance, "Unknown", liveness_status)
+        
+        # Store embedding for face change detection on next request
+        with EMBEDDING_LOCK:
+            LAST_VERIFIED_EMBEDDING = embedding.clone().detach()
+            LAST_VERIFIED_IDENTITY = identity_to_mark
+            print(f"[FACE-TRACK] Stored embedding for '{identity_to_mark}'")
     
     # Mask identity for Spoof responses
     if liveness_status == "Spoof":
