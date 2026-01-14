@@ -68,9 +68,16 @@ LAST_VERIFIED_EMBEDDING: Optional[torch.Tensor] = None
 LAST_VERIFIED_IDENTITY: Optional[str] = None
 FACE_CHANGE_THRESHOLD: float = 0.6  # If embedding distance > this, it's a different face
 
+# Identity smoothing: Track recent recognitions to stabilize identity (like desktop)
+RECOGNITION_HISTORY: List[Dict[str, Any]] = []  # [{identity, confidence, timestamp}, ...]
+RECOGNITION_HISTORY_SIZE: int = 10  # Keep last N recognitions
+SMOOTHING_MIN_COUNT: int = 2  # Require at least N occurrences to accept identity
+SMOOTHING_WEIGHT_BOOST: float = 1.3  # Boost weight for registered identities
+
 FACE_MESH_LOCK = threading.Lock()
 MODEL_LOCK = threading.Lock()
 EMBEDDING_LOCK = threading.Lock()  # Lock for last embedding state
+HISTORY_LOCK = threading.Lock()  # Lock for recognition history
 
 # Attendance logger ensures we continue writing to the artifacts log
 attendance_logger = AttendanceLogger(csv_path=OUTPUT_DIR / "attendance_log.csv")
@@ -271,6 +278,79 @@ def _serialize_dataframe(df) -> List[Dict[str, Any]]:
     return serializable.to_dict("records")
 
 
+def _smooth_identity(raw_identity: str, raw_confidence: float, raw_distance: float) -> tuple:
+    """
+    Apply temporal smoothing to identity recognition (like desktop's smooth_identity).
+    Uses weighted voting from recent recognition history.
+    
+    Returns: (smoothed_identity, smoothed_confidence, was_smoothed)
+    """
+    global RECOGNITION_HISTORY
+    
+    current_time = time.time()
+    
+    with HISTORY_LOCK:
+        # Add current recognition to history
+        RECOGNITION_HISTORY.append({
+            "identity": raw_identity,
+            "confidence": raw_confidence,
+            "distance": raw_distance,
+            "timestamp": current_time,
+        })
+        
+        # Trim to max size
+        if len(RECOGNITION_HISTORY) > RECOGNITION_HISTORY_SIZE:
+            RECOGNITION_HISTORY = RECOGNITION_HISTORY[-RECOGNITION_HISTORY_SIZE:]
+        
+        # Need at least 2 entries to smooth
+        if len(RECOGNITION_HISTORY) < 2:
+            return raw_identity, raw_confidence, False
+        
+        # Weighted voting
+        identity_scores: Dict[str, Dict[str, float]] = {}
+        
+        for entry in RECOGNITION_HISTORY:
+            hist_id = entry["identity"]
+            hist_conf = entry["confidence"]
+            
+            # Weight by confidence
+            weight = hist_conf / 100.0
+            
+            # Boost registered identities (not "Unknown" / "Not Registered" / None)
+            if hist_id and hist_id not in ("Not Registered", "Not Registered (Low Confidence)", "Unknown", "Spoof Detected"):
+                weight *= SMOOTHING_WEIGHT_BOOST
+            
+            if hist_id not in identity_scores:
+                identity_scores[hist_id] = {"weight": 0.0, "count": 0, "best_conf": 0.0}
+            
+            identity_scores[hist_id]["weight"] += weight
+            identity_scores[hist_id]["count"] += 1
+            identity_scores[hist_id]["best_conf"] = max(identity_scores[hist_id]["best_conf"], hist_conf)
+        
+        # Find best identity
+        best_identity = None
+        best_score = 0.0
+        best_conf = 0.0
+        
+        for identity, data in identity_scores.items():
+            # Require minimum count OR high confidence
+            avg_conf = (data["weight"] / data["count"]) * 100 if data["count"] > 0 else 0
+            if data["count"] >= SMOOTHING_MIN_COUNT or avg_conf > 75:
+                if data["weight"] > best_score:
+                    best_score = data["weight"]
+                    best_identity = identity
+                    best_conf = data["best_conf"]
+        
+        # If smoothed identity is valid registered user, use it
+        if best_identity and best_identity not in ("Not Registered", "Not Registered (Low Confidence)", "Unknown", "Spoof Detected", None):
+            was_smoothed = (best_identity != raw_identity)
+            if was_smoothed:
+                print(f"[SMOOTH] Corrected '{raw_identity}' -> '{best_identity}' (score: {best_score:.2f}, count: {identity_scores[best_identity]['count']})")
+            return best_identity, best_conf, was_smoothed
+        
+        return raw_identity, raw_confidence, False
+
+
 @app.on_event("startup")
 def _startup() -> None:
     global MODEL, VAL_TRANSFORM, EMPLOYEE_DB, THRESHOLD_VALUE
@@ -344,12 +424,26 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     best_name, min_distance, all_distances = verify_embedding_fast(embedding)
     threshold = round(request.threshold or THRESHOLD_VALUE, 4)
     confidence = max(0.0, min(100.0, (1.0 - (min_distance / threshold)) * 100.0)) if threshold > 0 else 0.0
-    matched = best_name if min_distance < threshold else None
+    raw_matched = best_name if min_distance < threshold else None
     
-    print(f"[VERIFY] Result: Best match '{best_name}' with distance {min_distance:.4f} (Threshold: {threshold}). Matched: {matched}")
+    # Apply identity smoothing (weighted voting from history)
+    smoothed_identity, smoothed_confidence, was_smoothed = _smooth_identity(
+        raw_matched if raw_matched else "Unknown",
+        confidence,
+        min_distance
+    )
+    
+    # Use smoothed identity if valid, otherwise fall back to raw
+    if smoothed_identity and smoothed_identity not in ("Unknown", "Not Registered"):
+        matched = smoothed_identity
+        confidence = smoothed_confidence
+    else:
+        matched = raw_matched
+    
+    print(f"[VERIFY] Raw: '{raw_matched}' dist={min_distance:.4f}, Smoothed: '{matched}' (was_smoothed={was_smoothed})")
 
     # Face change detection: check if current face is different from last verified
-    global LAST_VERIFIED_EMBEDDING, LAST_VERIFIED_IDENTITY
+    global LAST_VERIFIED_EMBEDDING, LAST_VERIFIED_IDENTITY, RECOGNITION_HISTORY
     face_changed = False
     
     with EMBEDDING_LOCK:
@@ -365,6 +459,10 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
                     print(f"[FACE-CHANGE] Reset cache for '{LAST_VERIFIED_IDENTITY}'")
                 LAST_VERIFIED_EMBEDDING = None
                 LAST_VERIFIED_IDENTITY = None
+                # Clear recognition history when face changes
+                with HISTORY_LOCK:
+                    RECOGNITION_HISTORY.clear()
+                    print("[FACE-CHANGE] Cleared recognition history")
 
     blink_details = None
     liveness_status = "Unknown"
