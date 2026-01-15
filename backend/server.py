@@ -209,8 +209,8 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     if not frames:
         return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
     
-    # Subsample: Only take 4 frames for maximum speed
-    num_samples = min(4, len(frames))
+    # Subsample: Take 8 frames to better capture quick blinks
+    num_samples = min(8, len(frames))
     step = max(1, len(frames) // num_samples)
     sampled_frames = [frames[i] for i in range(0, len(frames), step)][:num_samples]
     
@@ -253,20 +253,21 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     max_ear = max(ear_values)
     current_ear = ear_values[-1]
     
-    # More lenient threshold for natural blinks (not forced hard blinks)
-    # Natural blink: EAR drops to ~0.15-0.25, open eyes: ~0.25-0.35
-    EAR_THRESHOLD = 0.22  # Eye considered closed below this
-    EAR_OPEN = 0.28  # Eye considered open above this
+    # More lenient thresholds for natural blinks
+    # User's typical open eyes: ~0.35-0.45
+    # A natural blink should drop EAR by at least 0.08-0.10
+    EAR_THRESHOLD = 0.30  # Eye considered closed below this (raised from 0.22)
+    EAR_OPEN = 0.36  # Eye considered open above this (raised from 0.28)
     
     # Detect blink: eyes must have closed (min < threshold) AND been open (max > open threshold)
     has_blinked = min_ear < EAR_THRESHOLD and max_ear > EAR_OPEN
     
-    # Blink score for progressive feedback
+    # Blink score for progressive feedback (more lenient)
     if has_blinked:
         blink_score = 1.0
-    elif min_ear < 0.24 and max_ear > 0.26:
+    elif min_ear < 0.32 and max_ear > 0.34:
         blink_score = 0.7  # Very close to blink
-    elif min_ear < 0.26:
+    elif min_ear < 0.34:
         blink_score = 0.4  # Partial closure
     else:
         blink_score = 0.0
@@ -529,23 +530,28 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     best_name, min_distance, all_distances = verify_embedding_fast(embedding)
     threshold = round(request.threshold or THRESHOLD_VALUE, 4)
     confidence = max(0.0, min(100.0, (1.0 - (min_distance / threshold)) * 100.0)) if threshold > 0 else 0.0
-    raw_matched = best_name if min_distance < threshold else None
     
-    # Apply identity smoothing (weighted voting from history)
+    # Always pass best_name to smoothing (even if above threshold)
+    # This allows smoothing to stabilize identity across fluctuating distances
     smoothed_identity, smoothed_confidence, was_smoothed = _smooth_identity(
-        raw_matched if raw_matched else "Unknown",
+        best_name if best_name else "Unknown",
         confidence,
         min_distance
     )
     
-    # Use smoothed identity if valid, otherwise fall back to raw
+    # Determine final matched identity:
+    # 1. If smoothed identity is valid → use it
+    # 2. Otherwise use best_name only if distance < threshold
+    # 3. Otherwise no match
     if smoothed_identity and smoothed_identity not in ("Unknown", "Not Registered"):
         matched = smoothed_identity
         confidence = smoothed_confidence
+    elif min_distance < threshold:
+        matched = best_name
     else:
-        matched = raw_matched
+        matched = None
     
-    print(f"[VERIFY] Raw: '{raw_matched}' dist={min_distance:.4f}, Smoothed: '{matched}' (was_smoothed={was_smoothed})")
+    print(f"[VERIFY] Raw: '{best_name}' dist={min_distance:.4f}, Smoothed: '{matched}' (was_smoothed={was_smoothed})")
 
     # Face change detection: check if current face is different from last verified
     global LAST_VERIFIED_EMBEDDING, LAST_VERIFIED_IDENTITY, RECOGNITION_HISTORY
@@ -643,12 +649,12 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
         matched = None
 
     return {
-        "identity": matched if liveness_status == "Real" else (f"Liveness {liveness_status}" if matched else "Spoof Detected"),
+        "identity": matched if liveness_status == "Real" else None,
         "distance": float(min_distance),
         "confidence": float(confidence),
         "threshold": float(threshold),
         "liveness": liveness_status,
-        "locked": should_lock,  # Indicates if identity is now locked
+        "locked": should_lock,
         "blink": blink_details,
         "all_distances": [
             {"name": name, "distance": float(dist)} for name, dist in sorted(all_distances, key=lambda x: x[1])[:5]
@@ -662,8 +668,8 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
                     "height": max(0.0, min(1.0, h / frame_height)),
                 },
                 "is_primary": idx == primary_idx,
-                "identity": matched if idx == primary_idx and matched else None,
-                "confidence": float(confidence) if idx == primary_idx else None,
+                "identity": matched if idx == primary_idx else None,
+                "confidence": float(confidence) if idx == primary_idx and matched else None,
                 "liveness": liveness_status if idx == primary_idx else "Unknown",
             }
             for idx, (x, y, w, h) in enumerate(faces)

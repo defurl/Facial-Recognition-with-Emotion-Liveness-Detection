@@ -18,6 +18,9 @@ export interface BlinkDetails {
 
 export interface VerifyResponse {
   identity: string | null;
+  internal_match?: string | null;  // Silent match for skip-blink logic
+  ui_state?: "detecting" | "blink_required" | "verified";
+  locked?: boolean;
   distance: number;
   confidence: number;
   // Backend returns "Real" | "Spoof"

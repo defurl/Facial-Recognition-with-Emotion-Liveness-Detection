@@ -148,11 +148,11 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
       const y = bbox.y * height;
 
 
-      // Box styling: Red for Spoof/Unverified, Green for Real
-      const isSpoof = liveness?.toLowerCase() === "spoof" || liveness !== "Real";
+      // Box styling: green if verified (identity present), orange if blink needed
+      const isVerified = !!identity;
 
       const strokeColor = is_primary
-        ? (isSpoof ? "rgba(239, 68, 68, 0.9)" : "rgba(16, 185, 129, 0.9)")
+        ? (isVerified ? "rgba(16, 185, 129, 0.9)" : "rgba(251, 146, 60, 0.9)")  // green : orange
         : "rgba(148, 163, 184, 0.5)";
 
       ctx.strokeStyle = strokeColor;
@@ -163,11 +163,13 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         // Label Background
         ctx.font = "600 14px 'Inter', sans-serif";
 
-        // Show "Blink!" when liveness needed, otherwise show identity
-        const needsBlink = isSpoof && (lastResult?.blink?.blinks_needed ?? 0) > 0;
-        const idText = needsBlink ? "👁️ Blink to Verify" : (identity || "Unknown");
-        const confText = confidence ? `${Math.round(confidence)}%` : "";
-        const livenessText = needsBlink ? "Spoof" : (liveness || "");
+        // Simple display logic:
+        // - If identity is present (verified/locked/already checked in) → show "✅ {name}"
+        // - Otherwise → show "👁️ Blink to Verify"
+        const idText = identity ? `✅ ${identity}` : "👁️ Blink to Verify";
+        
+        const confText = identity && confidence ? `${Math.round(confidence)}%` : "";
+        const livenessText = identity ? (liveness || "") : "";
 
         // Blink Debug Info
         const blink = lastResult?.blink;
@@ -192,7 +194,7 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
         ctx.fillRect(x, bottomY, statsWidth + 20, 28);
 
-        ctx.fillStyle = isSpoof ? "#fca5a5" : "#86efac";
+        ctx.fillStyle = isVerified ? "#86efac" : "#fca5a5";
         ctx.fillText(statsText, x + 10, bottomY + 14);
 
         // Debug Info (Bottom + 30) - Always show if spoof or if debugText exists
