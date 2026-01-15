@@ -74,6 +74,18 @@ RECOGNITION_HISTORY_SIZE: int = 10  # Keep last N recognitions
 SMOOTHING_MIN_COUNT: int = 2  # Require at least N occurrences to accept identity
 SMOOTHING_WEIGHT_BOOST: float = 1.3  # Boost weight for registered identities
 
+# Verification lock: Prevent flickering after successful check-in
+VERIFICATION_LOCK: Dict[str, Any] = {
+    "identity": None,
+    "locked_at": 0.0,
+    "confidence": 0.0,
+    "thumbnail_b64": None,
+}
+LOCK_DURATION: float = 3.0  # seconds to hold lock
+MAJORITY_THRESHOLD: float = 0.6  # 60% of votes required
+VOTING_WINDOW: float = 2.0  # seconds of history to consider
+LOCK_STATE_LOCK = threading.Lock()  # Lock for verification lock state
+
 FACE_MESH_LOCK = threading.Lock()
 MODEL_LOCK = threading.Lock()
 EMBEDDING_LOCK = threading.Lock()  # Lock for last embedding state
@@ -191,22 +203,18 @@ def _prepare_embedding(face_crop: np.ndarray) -> torch.Tensor:
 
 def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     """
-    Blink detection using BlinkDetector class for consistency with desktop.
-    Uses Euclidean EAR calculation and 0.5 threshold from BlinkDetector.
+    Fast blink detection optimized for real-time performance.
+    Uses simple EAR variance detection with lenient natural blink thresholds.
     """
     if not frames:
         return {"has_blinked": False, "blink_score": 0.0, "frames_processed": 0, "min_ear": None, "blinks_needed": 1}
     
-    # Create a fresh BlinkDetector with desktop-matching threshold (0.5)
-    blink_detector = BlinkDetector(ear_threshold=0.5)
-    
-    # Subsample: Take up to 8 evenly spaced frames for speed
-    num_samples = min(8, len(frames))
+    # Subsample: Only take 4 frames for maximum speed
+    num_samples = min(4, len(frames))
     step = max(1, len(frames) // num_samples)
     sampled_frames = [frames[i] for i in range(0, len(frames), step)][:num_samples]
     
     ear_values = []
-    blink_detected_any = False
     
     for frame in sampled_frames:
         if frame is None:
@@ -218,14 +226,21 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
             if not result or not result.multi_face_landmarks:
                 continue
             
-            landmarks = result.multi_face_landmarks[0]
+            # Fast inline EAR calculation (avoids BlinkDetector overhead)
+            landmarks = result.multi_face_landmarks[0].landmark
             
-            # Use BlinkDetector's proper Euclidean EAR calculation
-            blink_detected, current_ear, _ = blink_detector.detect_blink(landmarks)
-            ear_values.append(current_ear)
+            # Left eye EAR (vertical / horizontal ratio)
+            left_v = (abs(landmarks[159].y - landmarks[145].y) + abs(landmarks[158].y - landmarks[153].y)) / 2
+            left_h = abs(landmarks[33].x - landmarks[133].x)
+            left_ear = left_v / left_h if left_h > 0.001 else 0
             
-            if blink_detected:
-                blink_detected_any = True
+            # Right eye EAR
+            right_v = (abs(landmarks[386].y - landmarks[374].y) + abs(landmarks[385].y - landmarks[380].y)) / 2
+            right_h = abs(landmarks[362].x - landmarks[263].x)
+            right_ear = right_v / right_h if right_h > 0.001 else 0
+            
+            avg_ear = (left_ear + right_ear) / 2.0
+            ear_values.append(avg_ear)
                 
         except Exception as e:
             print(f"[BLINK] Frame processing error: {e}")
@@ -238,26 +253,26 @@ def _process_blink_sequence(frames: List[np.ndarray]) -> Dict[str, Any]:
     max_ear = max(ear_values)
     current_ear = ear_values[-1]
     
-    # Unified threshold with desktop
-    EAR_THRESHOLD = 0.5
+    # More lenient threshold for natural blinks (not forced hard blinks)
+    # Natural blink: EAR drops to ~0.15-0.25, open eyes: ~0.25-0.35
+    EAR_THRESHOLD = 0.22  # Eye considered closed below this
+    EAR_OPEN = 0.28  # Eye considered open above this
     
-    # If BlinkDetector detected a proper blink cycle (with duration validation), use that
-    # Otherwise, use variance-based heuristic as fallback
-    has_blinked = blink_detected_any or (min_ear < EAR_THRESHOLD and max_ear > 0.55)
+    # Detect blink: eyes must have closed (min < threshold) AND been open (max > open threshold)
+    has_blinked = min_ear < EAR_THRESHOLD and max_ear > EAR_OPEN
     
-    # Blink score
+    # Blink score for progressive feedback
     if has_blinked:
         blink_score = 1.0
-    elif min_ear < 0.45 and max_ear > 0.50:
-        blink_score = 0.5  # Almost a blink
-    elif min_ear < 0.48:
-        blink_score = 0.3  # Partial closure
+    elif min_ear < 0.24 and max_ear > 0.26:
+        blink_score = 0.7  # Very close to blink
+    elif min_ear < 0.26:
+        blink_score = 0.4  # Partial closure
     else:
         blink_score = 0.0
     
-    print(f"[BLINK] Processed {len(ear_values)} frames. EAR: {min_ear:.3f}-{max_ear:.3f}, Blinked: {has_blinked}")
+    print(f"[BLINK] {len(ear_values)} frames. EAR: {min_ear:.3f}-{max_ear:.3f}, Blinked: {has_blinked}")
     
-    # Convert numpy types to Python native types for Pydantic serialization
     return {
         "has_blinked": bool(has_blinked),
         "blink_score": float(blink_score),
@@ -351,6 +366,64 @@ def _smooth_identity(raw_identity: str, raw_confidence: float, raw_distance: flo
         return raw_identity, raw_confidence, False
 
 
+def _check_majority_lock(current_identity: str, has_blinked: bool) -> tuple:
+    """
+    Check if identity should be locked based on majority voting over time window.
+    
+    Returns: (should_lock, majority_identity, vote_percentage)
+    """
+    if not current_identity or current_identity in ("Unknown", "Not Registered", "Spoof Detected"):
+        return False, None, 0.0
+    
+    current_time = time.time()
+    
+    with HISTORY_LOCK:
+        # Filter history to voting window
+        recent = [h for h in RECOGNITION_HISTORY if current_time - h["timestamp"] <= VOTING_WINDOW]
+        
+        if len(recent) < 3:  # Need minimum samples
+            return False, None, 0.0
+        
+        # Count votes per identity
+        votes: Dict[str, int] = {}
+        for h in recent:
+            identity = h.get("identity")
+            if identity and identity not in ("Unknown", "Not Registered", "Spoof Detected"):
+                votes[identity] = votes.get(identity, 0) + 1
+        
+        if not votes:
+            return False, None, 0.0
+        
+        # Find majority
+        total_valid = sum(votes.values())
+        best_identity = max(votes, key=votes.get)
+        best_count = votes[best_identity]
+        percentage = best_count / total_valid if total_valid > 0 else 0
+        
+        # Lock if majority threshold met AND blink passed
+        should_lock = percentage >= MAJORITY_THRESHOLD and has_blinked
+        
+        if should_lock:
+            print(f"[LOCK] Majority confirmed: '{best_identity}' with {percentage:.1%} ({best_count}/{total_valid})")
+        
+        return should_lock, best_identity, percentage
+
+
+def _clear_verification_lock(reason: str = ""):
+    """Clear the verification lock and related state."""
+    global VERIFICATION_LOCK, RECOGNITION_HISTORY
+    
+    with LOCK_STATE_LOCK:
+        old_identity = VERIFICATION_LOCK.get("identity")
+        VERIFICATION_LOCK = {"identity": None, "locked_at": 0.0, "confidence": 0.0, "thumbnail_b64": None}
+    
+    with HISTORY_LOCK:
+        RECOGNITION_HISTORY.clear()
+    
+    if old_identity:
+        print(f"[LOCK] Cleared lock for '{old_identity}' ({reason})")
+
+
 @app.on_event("startup")
 def _startup() -> None:
     global MODEL, VAL_TRANSFORM, EMPLOYEE_DB, THRESHOLD_VALUE
@@ -380,9 +453,41 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     frame_height, frame_width = frame.shape[:2]
     faces = detect_faces(frame)
     
+    # Check if no faces → clear lock and return error
     if not faces:
-        print(f"[VERIFY] Failed: No faces detected in frame ({frame_width}x{frame_height})")
+        _clear_verification_lock("no face detected")
+        print(f"[VERIFY] No faces detected in frame ({frame_width}x{frame_height})")
         raise HTTPException(400, detail="No faces detected in the provided image")
+    
+    # Check if identity is locked → return cached result immediately
+    current_time = time.time()
+    with LOCK_STATE_LOCK:
+        if VERIFICATION_LOCK.get("identity") and (current_time - VERIFICATION_LOCK["locked_at"]) < LOCK_DURATION:
+            locked_identity = VERIFICATION_LOCK["identity"]
+            locked_confidence = VERIFICATION_LOCK["confidence"]
+            print(f"[VERIFY] Returning locked identity: '{locked_identity}'")
+            
+            # Still return face detections but with locked identity
+            return {
+                "identity": locked_identity,
+                "distance": 0.0,
+                "confidence": float(locked_confidence),
+                "threshold": float(THRESHOLD_VALUE),
+                "liveness": "Real",
+                "locked": True,
+                "blink": {"has_blinked": True, "blink_score": 1.0, "frames_processed": 0, "blinks_needed": 0, "min_ear": None, "max_ear": None, "current_ear": None, "threshold": 0.22},
+                "all_distances": [],
+                "detections": [
+                    {
+                        "bbox": {"x": max(0.0, min(1.0, x / frame_width)), "y": max(0.0, min(1.0, y / frame_height)), "width": max(0.0, min(1.0, w / frame_width)), "height": max(0.0, min(1.0, h / frame_height))},
+                        "is_primary": idx == 0,
+                        "identity": locked_identity if idx == 0 else None,
+                        "confidence": locked_confidence if idx == 0 else None,
+                        "liveness": "Real" if idx == 0 else "Unknown",
+                    }
+                    for idx, (x, y, w, h) in enumerate(faces)
+                ],
+            }
         
     print(f"[VERIFY] Detected {len(faces)} faces")
     
@@ -510,6 +615,11 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
     
     # Mark attendance BEFORE nullifying matched (for blink pass case)
     print(f"[DEBUG] Checking attendance: identity_to_mark={identity_to_mark}, mark_attendance={request.mark_attendance}")
+    
+    # Check if we should lock the identity (majority voting passed + blink passed)
+    has_blinked = blink_details.get("has_blinked", False) if blink_details else False
+    should_lock, majority_identity, vote_pct = _check_majority_lock(matched, has_blinked)
+    
     if identity_to_mark and request.mark_attendance:
         print(f"[ATTENDANCE] Marking attendance for {identity_to_mark} after blink verification")
         background_tasks.add_task(attendance_logger.mark_attendance, identity_to_mark, min_distance, "Unknown", liveness_status)
@@ -519,6 +629,14 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
             LAST_VERIFIED_EMBEDDING = embedding.clone().detach()
             LAST_VERIFIED_IDENTITY = identity_to_mark
             print(f"[FACE-TRACK] Stored embedding for '{identity_to_mark}'")
+        
+        # Apply verification lock if majority confirmed
+        if should_lock and majority_identity:
+            with LOCK_STATE_LOCK:
+                VERIFICATION_LOCK["identity"] = majority_identity
+                VERIFICATION_LOCK["locked_at"] = time.time()
+                VERIFICATION_LOCK["confidence"] = confidence
+                print(f"[LOCK] Locked identity: '{majority_identity}' for {LOCK_DURATION}s (majority: {vote_pct:.1%})")
     
     # Mask identity for Spoof responses
     if liveness_status == "Spoof":
@@ -530,6 +648,7 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
         "confidence": float(confidence),
         "threshold": float(threshold),
         "liveness": liveness_status,
+        "locked": should_lock,  # Indicates if identity is now locked
         "blink": blink_details,
         "all_distances": [
             {"name": name, "distance": float(dist)} for name, dist in sorted(all_distances, key=lambda x: x[1])[:5]
@@ -550,6 +669,13 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
             for idx, (x, y, w, h) in enumerate(faces)
         ],
     }
+
+
+@app.post("/verify/reset")
+def verify_reset() -> Dict[str, Any]:
+    """Reset verification lock for next person."""
+    _clear_verification_lock("manual reset")
+    return {"success": True, "message": "Verification lock cleared"}
 
 
 @app.post("/register")
