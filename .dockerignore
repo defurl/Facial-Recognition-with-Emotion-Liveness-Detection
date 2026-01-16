@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+*.egg
+.pytest_cache
+
+# Virtual environments
+venv
+env
+.venv
+.env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Frontend (not needed in backend container)
+frontend/
+node_modules/
+
+# Desktop app (not needed)
+desktop/
+
+# Tests
+tests/
+*.test.py
+
+# Notebooks
+notebooks/
+*.ipynb
+
+# Outputs (will be regenerated)
+outputs/
+*.log
+
+# Large files (copy explicitly in Dockerfile if needed)
+# best_face_embedding_model.pth  # Actually need this
+
+# Temporary
+*.tmp
+*.temp
