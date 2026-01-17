@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import "./App.css";
 import { useBackendData } from "./hooks/useBackendData";
 import { VerificationPanel } from "./components/VerificationPanel";
-import { RegistrationPanel } from "./components/RegistrationPanel";
+import { RegistrationWizard } from "./components/RegistrationWizard";
 import { AttendancePanel } from "./components/AttendancePanel";
 import { EARDebugPanel } from "./components/EARDebugPanel";
 import { VerificationProvider } from "./context/verification";
@@ -160,7 +160,9 @@ function App() {
           onClose={() => setIsRegistrationOpen(false)}
           title="Register New Employee"
         >
-          <RegistrationPanel />
+          <section className="panel">
+            <RegistrationWizard />
+          </section>
         </Modal>
 
         {/* Delete Confirmation Modal */}

@@ -61,6 +61,39 @@ class FaceProcessor:
     def __init__(self, gui):
         self.gui = gui
 
+    def _detect_face_landmarks(self, frame, bbox, cropped_face, is_primary_face: bool, face_idx: int):
+        """Detect face landmarks using primary face matching or fallback to cropped face.
+        
+        Returns:
+            MediaPipe face landmarks or None if detection fails.
+        """
+        g = self.gui
+        x, y, w, h = bbox
+        face_landmarks = None
+
+        if is_primary_face:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            landmarks_results = face_mesh_detector.process(frame_rgb)
+            face_landmarks = g.match_landmarks_to_face((x, y, w, h), landmarks_results)
+
+            if face_landmarks and g.frame_count % 30 == 0:
+                print(f"[LANDMARKS] ✓ Matched landmarks to primary face {face_idx}")
+            elif g.frame_count % 30 == 0:
+                print(f"[LANDMARKS] ✗ No landmark match for primary face {face_idx}")
+
+        # Fallback: detect on cropped face
+        if face_landmarks is None:
+            rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+            landmarks_results = face_mesh_detector.process(rgb_face)
+            if landmarks_results and landmarks_results.multi_face_landmarks:
+                face_landmarks = landmarks_results.multi_face_landmarks[0]
+                if g.frame_count % 30 == 0:
+                    print(f"[LANDMARKS] ✓ Detected landmarks on cropped face {face_idx} (fallback)")
+            elif g.frame_count % 30 == 0:
+                print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
+
+        return face_landmarks
+
     def process_face(
         self,
         frame,
@@ -97,27 +130,10 @@ class FaceProcessor:
             if cropped_face.size > 0 and cropped_face.shape[0] >= 50:
                 cropped_face_resized = cv2.resize(cropped_face, (IMG_SIZE, IMG_SIZE))
 
-                # Landmarks
-                face_landmarks = None
-                if is_primary_face:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    landmarks_results = face_mesh_detector.process(frame_rgb)
-                    face_landmarks = g.match_landmarks_to_face((x, y, w, h), landmarks_results)
-
-                    if face_landmarks and g.frame_count % 30 == 0:
-                        print(f"[LANDMARKS] ✓ Matched landmarks to primary face {face_idx}")
-                    elif g.frame_count % 30 == 0:
-                        print(f"[LANDMARKS] ✗ No landmark match for primary face {face_idx}")
-
-                if face_landmarks is None:
-                    rgb_face = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                    landmarks_results = face_mesh_detector.process(rgb_face)
-                    if landmarks_results and landmarks_results.multi_face_landmarks:
-                        face_landmarks = landmarks_results.multi_face_landmarks[0]
-                        if g.frame_count % 30 == 0:
-                            print(f"[LANDMARKS] ✓ Detected landmarks on cropped face {face_idx} (fallback)")
-                    elif g.frame_count % 30 == 0:
-                        print(f"[LANDMARKS] ✗ FAILED to detect landmarks for face {face_idx} (crop size: {cropped_face.shape})")
+                # Detect face landmarks (extracted helper)
+                face_landmarks = self._detect_face_landmarks(
+                    frame, bbox, cropped_face, is_primary_face, face_idx
+                )
 
                 # Early identity for spoof cache
                 early_identity = None

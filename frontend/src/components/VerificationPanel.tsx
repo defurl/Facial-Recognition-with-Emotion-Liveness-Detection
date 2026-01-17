@@ -13,9 +13,7 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
 
   const [message, setMessage] = useState<string | null>(null);
   const [isMirrored, setIsMirrored] = useState(false);
-  const [blinkChallenge, setBlinkChallenge] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lastAttendanceRef = useRef<number>(0);
 
   // Rolling buffer: Keep last 20 frames for instant blink check
   const frameBufferRef = useRef<string[]>([]);
@@ -45,9 +43,8 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         mark_attendance: true
       });
 
-      // Show blink overlay if needed
-      const needsBlink = payload.liveness === "Spoof" && (payload.blink?.blinks_needed ?? 0) > 0;
-      setBlinkChallenge(needsBlink);
+      // Show blink overlay if needed (preserved for future use)
+      // const needsBlink = payload.liveness === "Spoof" && (payload.blink?.blinks_needed ?? 0) > 0;
 
       setLastCapture(primaryFrame);
       setLastResult(payload);
@@ -135,7 +132,7 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
 
     // Draw detected faces
     detections.forEach((face) => {
-      const { bbox, is_primary, identity, confidence, liveness } = face;
+      const { bbox, is_primary, identity, liveness } = face;
 
       const w = bbox.width * width;
       const h = bbox.height * height;
@@ -166,10 +163,10 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         // Simple display logic:
         // - If identity is present (verified/locked/already checked in) → show "✅ {name}"
         // - Otherwise → show "👁️ Blink to Verify"
-        const idText = identity ? `✅ ${identity}` : "👁️ Blink to Verify";
+        const idText = identity ? `✅ ${identity}` : "Blink to Verify";
         
         // const confText = identity && confidence ? `${Math.round(confidence)}%` : "";
-        const livenessText = identity ? (liveness || "") : "";
+        const livenessText = identity ? (liveness || "Spoof") : "Spoof";
 
         // // Blink Debug Info
         // const blink = lastResult?.blink;
