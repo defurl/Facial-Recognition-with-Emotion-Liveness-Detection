@@ -168,14 +168,14 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         // - Otherwise → show "👁️ Blink to Verify"
         const idText = identity ? `✅ ${identity}` : "👁️ Blink to Verify";
         
-        const confText = identity && confidence ? `${Math.round(confidence)}%` : "";
+        // const confText = identity && confidence ? `${Math.round(confidence)}%` : "";
         const livenessText = identity ? (liveness || "") : "";
 
-        // Blink Debug Info
-        const blink = lastResult?.blink;
-        const debugText = blink
-          ? `EAR: ${blink.min_ear?.toFixed(2) ?? "--"} | Frames: ${blink.frames_processed} | Needed: ${blink.blinks_needed}`
-          : "";
+        // // Blink Debug Info
+        // const blink = lastResult?.blink;
+        // const debugText = blink
+        //   ? `EAR: ${blink.min_ear?.toFixed(2) ?? "--"} | F rames: ${blink.frames_processed} | Needed: ${blink.blinks_needed}`
+        //   : "";
 
         // Identity Tag (Top)
         const idWidth = ctx.measureText(idText).width;
@@ -188,7 +188,7 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
 
         // Stats Tag (Bottom)
         const bottomY = y + h;
-        const statsText = `${livenessText} ${confText}`;
+        const statsText = `${livenessText}`; //  ${confText}
         const statsWidth = ctx.measureText(statsText).width;
 
         ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
@@ -197,15 +197,15 @@ export function VerificationPanel({ isPaused = false }: VerificationPanelProps) 
         ctx.fillStyle = isVerified ? "#86efac" : "#fca5a5";
         ctx.fillText(statsText, x + 10, bottomY + 14);
 
-        // Debug Info (Bottom + 30) - Always show if spoof or if debugText exists
-        if (debugText) {
-          const debugWidth = ctx.measureText(debugText).width;
-          ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-          ctx.fillRect(x, bottomY + 30, debugWidth + 20, 24);
-          ctx.fillStyle = "#cbd5e1";
-          ctx.font = "500 12px 'Inter', monospace";
-          ctx.fillText(debugText, x + 10, bottomY + 42);
-        }
+        // // Debug Info (Bottom + 30) - Always show if spoof or if debugText exists
+        // if (debugText) {
+        //   const debugWidth = ctx.measureText(debugText).width;
+        //   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        //   ctx.fillRect(x, bottomY + 30, debugWidth + 20, 24);
+        //   ctx.fillStyle = "#cbd5e1";
+        //   ctx.font = "500 12px 'Inter', monospace";
+        //   ctx.fillText(debugText, x + 10, bottomY + 42);
+        // }
       }
     });
   }, [lastResult, videoRef, isMirrored]);
