@@ -3215,7 +3215,7 @@ Quality Assessment:
                 x, y, w, h = bbox
                 emotion = res.get("emotion", "Neutral")
                 liveness = "Real" if is_live else "Spoof"
-                display_text = f"{identity} ({emotion} | {liveness})"
+                display_text = f"{identity} ({liveness})"
                 recognized = identity not in {"Not Registered", "Error", "Spoof Detected", "Processing..."}
                 draw_face_box_with_label(processed_frame, (x, y, w, h), box_color, display_text, is_recognized=recognized)
 

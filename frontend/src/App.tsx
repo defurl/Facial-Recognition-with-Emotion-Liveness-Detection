@@ -5,6 +5,7 @@ import { VerificationPanel } from "./components/VerificationPanel";
 import { RegistrationPanel } from "./components/RegistrationPanel";
 import { AttendancePanel } from "./components/AttendancePanel";
 import { EARDebugPanel } from "./components/EARDebugPanel";
+import { CameraSelector } from "./components/CameraSelector";
 import { VerificationProvider } from "./context/verification";
 import { updateThreshold, deleteEmployee } from "./services/apiClient";
 import { Modal } from "./components/Modal";
@@ -116,6 +117,7 @@ function App() {
                   <label>Identities</label>
                   <span className="value">{employees.length}</span>
                 </div>
+                <CameraSelector />
               </div>
             </div>
 

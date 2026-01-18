@@ -43,8 +43,8 @@ MAX_IMAGES_PER_IDENTITY_TRAIN = 30  # limit training images per identity
 RANDOM_SEED = 42
 
 # ============= Verification Settings =============
-OPTIMAL_THRESHOLD = 1.15  # for notebook evaluation
-OPTIMAL_THRESHOLD_GUI = 1.1  # for GUI - optimized based on verification analysis (was 0.8)
+OPTIMAL_THRESHOLD = 0.90  # tuned for typical user distance ~0.85
+OPTIMAL_THRESHOLD_GUI = 0.90  # allows margin for natural distance variation
 
 # ============= GUI Settings =============
 PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames

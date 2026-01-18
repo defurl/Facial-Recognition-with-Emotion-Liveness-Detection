@@ -68,10 +68,15 @@ LAST_VERIFIED_EMBEDDING: Optional[torch.Tensor] = None
 LAST_VERIFIED_IDENTITY: Optional[str] = None
 FACE_CHANGE_THRESHOLD: float = 0.6  # If embedding distance > this, it's a different face
 
+# Rejection settings for unregistered users (ported from desktop)
+CONFIDENCE_REJECTION_THRESHOLD: float = 0.05  # 5% minimum confidence to accept
+SMALL_DB_THRESHOLD_DIVISOR: float = 1.2  # Make threshold stricter for DBs with ≤2 users (0.90/1.2=0.75)
+SMALL_DB_MAX_SIZE: int = 2  # Apply stricter threshold when DB has this many or fewer users
+
 # Identity smoothing: Track recent recognitions to stabilize identity (like desktop)
 RECOGNITION_HISTORY: List[Dict[str, Any]] = []  # [{identity, confidence, timestamp}, ...]
 RECOGNITION_HISTORY_SIZE: int = 10  # Keep last N recognitions
-SMOOTHING_MIN_COUNT: int = 2  # Require at least N occurrences to accept identity
+SMOOTHING_MIN_COUNT: int = 3  # Require at least 3 consistent frames to accept identity
 SMOOTHING_WEIGHT_BOOST: float = 1.3  # Boost weight for registered identities
 
 # Verification lock: Prevent flickering after successful check-in
@@ -81,7 +86,7 @@ VERIFICATION_LOCK: Dict[str, Any] = {
     "confidence": 0.0,
     "thumbnail_b64": None,
 }
-LOCK_DURATION: float = 3.0  # seconds to hold lock
+LOCK_DURATION: float = 10.0  # seconds to hold lock (extended to reduce flicker)
 MAJORITY_THRESHOLD: float = 0.6  # 60% of votes required
 VOTING_WINDOW: float = 2.0  # seconds of history to consider
 LOCK_STATE_LOCK = threading.Lock()  # Lock for verification lock state
@@ -349,9 +354,8 @@ def _smooth_identity(raw_identity: str, raw_confidence: float, raw_distance: flo
         best_conf = 0.0
         
         for identity, data in identity_scores.items():
-            # Require minimum count OR high confidence
-            avg_conf = (data["weight"] / data["count"]) * 100 if data["count"] > 0 else 0
-            if data["count"] >= SMOOTHING_MIN_COUNT or avg_conf > 75:
+            # Require minimum count (remove high-confidence bypass to prevent single-frame false positives)
+            if data["count"] >= SMOOTHING_MIN_COUNT:
                 if data["weight"] > best_score:
                     best_score = data["weight"]
                     best_identity = identity
@@ -529,29 +533,46 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
 
     best_name, min_distance, all_distances = verify_embedding_fast(embedding)
     threshold = round(request.threshold or THRESHOLD_VALUE, 4)
+    
+    # Adjust threshold for small databases (stricter to prevent false positives)
+    db_size = len(EMPLOYEE_DB)
+    effective_threshold = threshold
+    if db_size <= SMALL_DB_MAX_SIZE:
+        effective_threshold = threshold / SMALL_DB_THRESHOLD_DIVISOR
+        print(f"[VERIFY] Small DB ({db_size} users) - using stricter threshold: {effective_threshold:.3f}")
+    
     confidence = max(0.0, min(100.0, (1.0 - (min_distance / threshold)) * 100.0)) if threshold > 0 else 0.0
     
-    # Always pass best_name to smoothing (even if above threshold)
-    # This allows smoothing to stabilize identity across fluctuating distances
-    smoothed_identity, smoothed_confidence, was_smoothed = _smooth_identity(
-        best_name if best_name else "Unknown",
-        confidence,
-        min_distance
-    )
-    
-    # Determine final matched identity:
-    # 1. If smoothed identity is valid → use it
-    # 2. Otherwise use best_name only if distance < threshold
-    # 3. Otherwise no match
-    if smoothed_identity and smoothed_identity not in ("Unknown", "Not Registered"):
-        matched = smoothed_identity
-        confidence = smoothed_confidence
-    elif min_distance < threshold:
+    # EARLY CHECK: If user already checked in today, bypass strict threshold
+    # This prevents flicker when distance temporarily exceeds threshold for verified users
+    already_verified_today = best_name and attendance_logger.has_checked_in_today(best_name)
+    if already_verified_today:
+        print(f"[VERIFY] User '{best_name}' already verified today - bypassing strict threshold")
         matched = best_name
+        # Skip distance gating entirely for already-verified users
     else:
-        matched = None
+        # GATE 1: Only accept if distance is below EFFECTIVE threshold
+        raw_matched = best_name if min_distance < effective_threshold else None
+        
+        # GATE 2: Reject low confidence matches
+        if raw_matched and confidence < CONFIDENCE_REJECTION_THRESHOLD * 100:
+            print(f"[VERIFY] Rejecting '{raw_matched}' - low confidence: {confidence:.1f}%")
+            raw_matched = None
+        
+        smoothed_identity, smoothed_confidence, was_smoothed = _smooth_identity(
+            raw_matched if raw_matched else "Unknown",
+            confidence if raw_matched else 0.0,
+            min_distance
+        )
+        
+        # Final identity: use smoothed result (which now only contains gated entries)
+        if smoothed_identity and smoothed_identity not in ("Unknown", "Not Registered"):
+            matched = smoothed_identity
+            confidence = smoothed_confidence
+        else:
+            matched = raw_matched
     
-    print(f"[VERIFY] Raw: '{best_name}' dist={min_distance:.4f}, Smoothed: '{matched}' (was_smoothed={was_smoothed})")
+    print(f"[VERIFY] Raw: '{best_name}' dist={min_distance:.4f}, eff_thresh={effective_threshold:.3f}, matched: '{matched}' (verified_today={already_verified_today})")
 
     # Face change detection: check if current face is different from last verified
     global LAST_VERIFIED_EMBEDDING, LAST_VERIFIED_IDENTITY, RECOGNITION_HISTORY
@@ -668,8 +689,9 @@ def verify(request: VerifyRequest, background_tasks: BackgroundTasks) -> Dict[st
                     "height": max(0.0, min(1.0, h / frame_height)),
                 },
                 "is_primary": idx == primary_idx,
-                "identity": matched if idx == primary_idx else None,
-                "confidence": float(confidence) if idx == primary_idx and matched else None,
+                # Only show identity when liveness is Real (not during "blink to verify" state)
+                "identity": matched if idx == primary_idx and liveness_status == "Real" else None,
+                "confidence": float(confidence) if idx == primary_idx and matched and liveness_status == "Real" else None,
                 "liveness": liveness_status if idx == primary_idx else "Unknown",
             }
             for idx, (x, y, w, h) in enumerate(faces)
