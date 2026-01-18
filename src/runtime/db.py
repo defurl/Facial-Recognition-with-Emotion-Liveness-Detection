@@ -38,17 +38,25 @@ def build_embedding_index(
     cursor = 0
 
     for name, stored in employee_db.items():
-        if use_multi_embedding and isinstance(stored, list):
-            # Ensure each embedding is [512] (1D) before stacking
+        # Handle different storage formats:
+        # 1. List of tensors (old format): [tensor([256]), tensor([256]), ...]
+        # 2. Stacked tensor (rebuild_db.py format): tensor([N, 256])
+        # 3. Single tensor: tensor([256]) or tensor([1, 256])
+        
+        if isinstance(stored, list):
+            # Old format: list of individual tensors
             emb_list = []
             for emb in stored:
                 t = emb.detach().float().cpu()
                 if t.ndim == 2 and t.shape[0] == 1:
                     t = t.squeeze(0)
                 emb_list.append(t)
+        elif stored.ndim == 2 and stored.shape[0] > 1:
+            # Stacked format from rebuild_db.py: [N, 256] - convert to list
+            emb_list = [stored[i].detach().float().cpu() for i in range(stored.shape[0])]
         else:
-            emb = stored[0] if isinstance(stored, list) else stored
-            t = emb.detach().float().cpu()
+            # Single tensor: [256] or [1, 256]
+            t = stored.detach().float().cpu()
             if t.ndim == 2 and t.shape[0] == 1:
                 t = t.squeeze(0)
             emb_list = [t]
