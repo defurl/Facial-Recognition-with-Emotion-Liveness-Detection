@@ -1,0 +1,20 @@
+{
+  "max_images_per_identity": null,
+  "num_epochs": 50,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "margin": 0.5,
+  "early_stopping_patience": 10,
+  "min_improvement": 0.001,
+  "embedding_dim": 256,
+  "use_cbam": true,
+  "seed": 42,
+  "experiment_name": "optimized_metric_20260119_104226",
+  "total_training_time_sec": 5935.124229669571,
+  "epochs_trained": 31,
+  "best_epoch": 21,
+  "best_val_loss": 0.08951308274269104,
+  "train_images": 380638,
+  "val_images": 8000,
+  "num_classes": 4000
+}

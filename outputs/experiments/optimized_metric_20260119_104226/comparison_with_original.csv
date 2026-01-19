@@ -1,0 +1,7 @@
+Metric,Original (Limited),Optimized (Full)
+Training Images,"~120,000 (30/identity)","380,638 (all)"
+Epochs Trained,80,31
+Best Epoch,70,21
+Best Val Loss,0.0980,0.0895
+Best Val Acc (%),93.26,94.27
+Total Time (min),89.5,98.9
