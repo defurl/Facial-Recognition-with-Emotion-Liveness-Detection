@@ -166,7 +166,6 @@ class FaceEmbeddingCNN(nn.Module):
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-
 def get_loss_functions():
     """
     Get loss functions for training.
@@ -174,7 +173,7 @@ def get_loss_functions():
     returns:
         Tuple of (softmax_loss, triplet_loss)
     """
-    # outputs raw logits 
+    # outputs raw logits
     loss_softmax = nn.CrossEntropyLoss()
     # use margin for triplet loss
     loss_triplet = nn.TripletMarginLoss(margin=0.5, p=2)
