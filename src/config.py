@@ -1,6 +1,6 @@
 """
-Configuration file for Face Recognition Attendance System
-Contains all hyperparameters, paths, and settings
+Configuration file for Face Verification with Metric Learning
+Contains hyperparameters, paths, and settings for triplet loss training
 """
 
 from pathlib import Path
@@ -20,35 +20,25 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ============= Model Paths =============
-MODEL_SOFTMAX_PATH = OUTPUT_DIR / "best_softmax_model.pth"
 MODEL_METRIC_PATH = OUTPUT_DIR / "best_metric_model.pth"
-EMPLOYEE_DB_PATH = OUTPUT_DIR / "employee_db.pt"
+MODEL_BASELINE_PATH = OUTPUT_DIR / "OLD_baseline_metric_model.pth"
 
 # ============= Model Hyperparameters =============
 IMG_SIZE = 64  # default image size (64x64)
 EMBEDDING_DIM = 256  # embedding dimension for metric learning
 BATCH_SIZE = 128
-USE_CBAM = True  # toggle to enable/disable CBAM modules in the model
-# Update default training epochs when experimenting with CBAM
-NUM_EPOCHS_SOFTMAX = 80
-NUM_EPOCHS_METRIC = 80
+USE_CBAM = True  # CBAM attention modules enabled
+NUM_EPOCHS = 50  # optimized epoch count
 LEARNING_RATE = 1e-3
 MARGIN = 0.5  # triplet loss margin
 
 # ============= Training Settings =============
-MAX_IMAGES_PER_IDENTITY_TRAIN = 30  # limit training images per identity
+MAX_IMAGES_PER_IDENTITY_TRAIN = None  # None = use ALL images (full dataset)
 RANDOM_SEED = 42
+EARLY_STOPPING_PATIENCE = 10
 
 # ============= Verification Settings =============
-OPTIMAL_THRESHOLD = 1.15  # for notebook evaluation
-OPTIMAL_THRESHOLD_GUI = 0.8  # for GUI (stricter)
-
-# ============= GUI Settings =============
-PROCESS_EVERY_N_FRAMES = 10  # process heavy tasks every N frames
-TARGET_FPS = 30
-GUI_WINDOW_WIDTH = 640
-GUI_WINDOW_HEIGHT = 480
-CAMERA_INDEX = 1  # default camera index; app will fallback to others if unavailable
+OPTIMAL_THRESHOLD = 1.15  # for ROC evaluation
 
 # ============= Image Normalization =============
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -61,7 +51,7 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def print_config():
     """Print configuration summary"""
     print("=" * 70)
-    print("CONFIGURATION SUMMARY")
+    print("FACE VERIFICATION - CONFIGURATION SUMMARY")
     print("=" * 70)
     print(f"Device: {DEVICE}")
     print(f"Base Directory: {BASE_DIR}")
@@ -70,15 +60,16 @@ def print_config():
     print(f"\nModel Settings:")
     print(f"  Image Size: {IMG_SIZE}x{IMG_SIZE}")
     print(f"  Embedding Dim: {EMBEDDING_DIM}")
+    print(f"  CBAM Attention: {USE_CBAM}")
     print(f"  Batch Size: {BATCH_SIZE}")
     print(f"  Learning Rate: {LEARNING_RATE}")
+    print(f"  Triplet Margin: {MARGIN}")
     print(f"\nTraining:")
-    print(f"  Softmax Epochs: {NUM_EPOCHS_SOFTMAX}")
-    print(f"  Metric Epochs: {NUM_EPOCHS_METRIC}")
-    print(f"  Max Images/Identity: {MAX_IMAGES_PER_IDENTITY_TRAIN}")
+    print(f"  Epochs: {NUM_EPOCHS}")
+    print(f"  Early Stopping: patience={EARLY_STOPPING_PATIENCE}")
+    print(f"  Max Images/Identity: {'ALL' if MAX_IMAGES_PER_IDENTITY_TRAIN is None else MAX_IMAGES_PER_IDENTITY_TRAIN}")
     print(f"\nVerification:")
-    print(f"  Threshold (Evaluation): {OPTIMAL_THRESHOLD}")
-    print(f"  Threshold (GUI): {OPTIMAL_THRESHOLD_GUI}")
+    print(f"  Threshold: {OPTIMAL_THRESHOLD}")
     print("=" * 70)
 
 if __name__ == "__main__":

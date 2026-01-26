@@ -140,7 +140,6 @@ def evaluate_and_plot(results: dict, out_dir: Path) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--softmax-model', type=Path, default=ROOT / 'outputs' / 'best_softmax_model.pth')
     p.add_argument('--metric-model', type=Path, default=ROOT / 'outputs' / 'best_metric_model.pth')
     p.add_argument('--pairs', type=Path, default=ROOT / 'dataset' / 'verification_pairs_val.txt')
     p.add_argument('--batch-size', type=int, default=256)
@@ -174,18 +173,6 @@ def main():
     for metric in ['euclidean', 'cosine']:
         print(f'\n--- Evaluating with {metric} metric ---')
         
-        # Softmax model (use 'metric' mode for normalized embeddings)
-        soft_path = args.softmax_model
-        if soft_path.exists():
-            print(f'Loading softmax model from {soft_path}')
-            model_soft = FaceEmbeddingCNN(embedding_dim=256, num_classes=4000).to(device)
-            model_soft.load_state_dict(torch.load(soft_path, map_location=device))
-            model_soft.eval()
-            scores, labels = compute_scores(model_soft, loader, device, model_mode='metric', metric=metric)
-            results[f'Softmax - {metric.capitalize()}'] = {'scores': scores, 'labels': labels}
-        else:
-            print('Softmax model not found at', soft_path)
-
         # Metric model (use 'metric' mode)
         metric_path = args.metric_model
         if metric_path.exists():
