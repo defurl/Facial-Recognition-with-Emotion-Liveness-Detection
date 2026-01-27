@@ -37,6 +37,14 @@ MAX_IMAGES_PER_IDENTITY_TRAIN = None  # None = use ALL images (full dataset)
 RANDOM_SEED = 42
 EARLY_STOPPING_PATIENCE = 10
 
+# ============= TDA (Topological Data Analysis) Settings =============
+USE_TDA = True  # Enable TDA regularization on attention maps
+TDA_LOSS_WEIGHT = 0.05  # Weight for TDA loss term in total loss
+TDA_APPLY_EVERY_N_BATCHES = 1  # Apply TDA loss every N batches (1 = every batch)
+TDA_TARGET_ENTROPY = 0.5  # Target persistence entropy (lower = more focused attention)
+TDA_ENTROPY_WEIGHT = 1.0  # Weight for entropy deviation in TDA loss
+TDA_COMPLEXITY_WEIGHT = 0.1  # Weight for topological complexity penalty
+
 # ============= Verification Settings =============
 OPTIMAL_THRESHOLD = 1.15  # for ROC evaluation
 
@@ -68,6 +76,11 @@ def print_config():
     print(f"  Epochs: {NUM_EPOCHS}")
     print(f"  Early Stopping: patience={EARLY_STOPPING_PATIENCE}")
     print(f"  Max Images/Identity: {'ALL' if MAX_IMAGES_PER_IDENTITY_TRAIN is None else MAX_IMAGES_PER_IDENTITY_TRAIN}")
+    print(f"\nTDA Settings:")
+    print(f"  Enabled: {USE_TDA}")
+    print(f"  Loss Weight: {TDA_LOSS_WEIGHT}")
+    print(f"  Apply Every N Batches: {TDA_APPLY_EVERY_N_BATCHES}")
+    print(f"  Target Entropy: {TDA_TARGET_ENTROPY}")
     print(f"\nVerification:")
     print(f"  Threshold: {OPTIMAL_THRESHOLD}")
     print("=" * 70)
