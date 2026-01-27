@@ -58,7 +58,7 @@ For a 2D attention map $A \in [0, 1]^{H \times W}$:
 Threshold = 0.1:        Threshold = 0.5:        Threshold = 0.9:
 ■ ■ ■ ■ ■              ■ □ □ □ ■              □ □ □ □ □
 ■ ■ ■ ■ ■              □ ■ ■ ■ □              □ □ ■ □ □
-■ ■ ■ ■ ■      →      □ ■ □ ■ □      →      □ □ □ □ □
+■ ■ ■ ■ ■      →       □ ■ □ ■ □      →       □ □ □ □ □
 ■ ■ ■ ■ ■              □ ■ ■ ■ □              □ □ □ □ □
 ■ ■ ■ ■ ■              ■ □ □ □ ■              □ □ □ □ □
 
@@ -183,22 +183,22 @@ where:
 Input Image (64×64×3)
         ↓
    ┌────────────────────────────────────────────┐
-   │           FaceEmbeddingCNN                  │
+   │           FaceEmbeddingCNN                 │
    │  ┌──────────────────────────────────────┐  │
    │  │  Block 1: Conv → BN → ReLU → CBAM    │  │
    │  │  Block 2: Conv → BN → ReLU → CBAM    │  │
    │  │  Block 3: Conv → BN → ReLU → CBAM    │  │
    │  │  Block 4: Conv → BN → ReLU → CBAM ←──┼──┼── Extract attention (8×8)
    │  └──────────────────────────────────────┘  │
-   │              ↓                              │
+   │              ↓                             │
    │    Global Average Pooling → Embedding      │
    └────────────────────────────────────────────┘
-        ↓                    ↓
-   Embeddings            Attention Map
-        ↓                    ↓
-   Triplet Loss          TDA Loss
-        ↓                    ↓
-   ────────── Combined Loss ──────────
+                ↓                    ↓
+        Embeddings            Attention Map
+                ↓                    ↓
+        Triplet Loss          TDA Loss
+                ↓                    ↓
+        ────────── Combined Loss ──────────
 ```
 
 ### 4.2 Key Components
