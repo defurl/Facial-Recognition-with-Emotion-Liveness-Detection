@@ -1,6 +1,6 @@
 """
-Configuration file for Face Verification with Metric Learning
-Contains hyperparameters, paths, and settings for triplet loss training
+Configuration for Face Verification with Dual-Stream CNN + TDA
+Combines CNN embeddings with GUDHI-based Persistence Image features
 """
 
 from pathlib import Path
@@ -20,33 +20,55 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ============= Model Paths =============
-MODEL_METRIC_PATH = OUTPUT_DIR / "best_metric_model.pth"
-MODEL_BASELINE_PATH = OUTPUT_DIR / "OLD_baseline_metric_model.pth"
+MODEL_PATH = OUTPUT_DIR / "best_dual_stream_model.pth"
+TDA_CACHE_DIR = OUTPUT_DIR / "tda_cache"
 
-# ============= Model Hyperparameters =============
-IMG_SIZE = 64  # default image size (64x64)
-EMBEDDING_DIM = 256  # embedding dimension for metric learning
+# ============= Model Architecture =============
+IMG_SIZE = 64  # Image size (64x64)
+EMBEDDING_DIM = 256  # CNN embedding dimension
+TDA_DIM = 400  # TDA persistence image features (20x20)
+TDA_HIDDEN_DIM = 128  # TDA branch hidden dimension
+FUSION_DIM = EMBEDDING_DIM + TDA_HIDDEN_DIM  # Combined: 256 + 128 = 384
+USE_CBAM = True  # CBAM attention modules in CNN
+
+# ============= Training Hyperparameters =============
 BATCH_SIZE = 128
-USE_CBAM = True  # CBAM attention modules enabled
-NUM_EPOCHS = 50  # optimized epoch count
+NUM_EPOCHS = 20
 LEARNING_RATE = 1e-3
-MARGIN = 0.5  # triplet loss margin
+WEIGHT_DECAY = 5e-4  # L2 regularization
+MARGIN = 0.5  # Triplet loss margin
+DROPOUT = 0.3  # Dropout rate
 
 # ============= Training Settings =============
-MAX_IMAGES_PER_IDENTITY_TRAIN = None  # None = use ALL images (full dataset)
 RANDOM_SEED = 42
 EARLY_STOPPING_PATIENCE = 10
 
-# ============= TDA (Topological Data Analysis) Settings =============
-USE_TDA = True  # Enable TDA regularization on attention maps
-TDA_LOSS_WEIGHT = 0.05  # Weight for TDA loss term in total loss
-TDA_APPLY_EVERY_N_BATCHES = 1  # Apply TDA loss every N batches (1 = every batch)
-TDA_TARGET_ENTROPY = 0.5  # Target persistence entropy (lower = more focused attention)
-TDA_ENTROPY_WEIGHT = 1.0  # Weight for entropy deviation in TDA loss
-TDA_COMPLEXITY_WEIGHT = 0.1  # Weight for topological complexity penalty
+# ============= Data Augmentation =============
+AUGMENTATION = {
+    'horizontal_flip': 0.5,
+    'rotation_degrees': 10,
+    'color_jitter': {'brightness': 0.2, 'contrast': 0.2, 'saturation': 0.1},
+    'random_affine_translate': (0.1, 0.1),
+    'random_erasing': {'p': 0.1, 'scale': (0.02, 0.1)},
+}
+
+# ============= Learning Rate Scheduler =============
+LR_SCHEDULER = {
+    'type': 'ReduceLROnPlateau',
+    'mode': 'min',
+    'factor': 0.5,
+    'patience': 3,
+}
+
+# ============= TDA Feature Extraction (GUDHI) =============
+TDA_CONFIG = {
+    'resolution': (20, 20),  # Persistence image resolution
+    'bandwidth': 50.0,  # Gaussian kernel bandwidth
+    'weight_max': 1.0,  # Maximum weight for persistence
+}
 
 # ============= Verification Settings =============
-OPTIMAL_THRESHOLD = 1.15  # for ROC evaluation
+OPTIMAL_THRESHOLD = 1.15  # Distance threshold for verification
 
 # ============= Image Normalization =============
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -56,34 +78,37 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 import torch
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
 def print_config():
     """Print configuration summary"""
     print("=" * 70)
-    print("FACE VERIFICATION - CONFIGURATION SUMMARY")
+    print("FACE VERIFICATION - DUAL-STREAM CNN + TDA CONFIGURATION")
     print("=" * 70)
     print(f"Device: {DEVICE}")
     print(f"Base Directory: {BASE_DIR}")
-    print(f"Dataset Directory: {DATASET_DIR}")
     print(f"Output Directory: {OUTPUT_DIR}")
-    print(f"\nModel Settings:")
+    print(f"\nModel Architecture:")
     print(f"  Image Size: {IMG_SIZE}x{IMG_SIZE}")
-    print(f"  Embedding Dim: {EMBEDDING_DIM}")
+    print(f"  CNN Embedding: {EMBEDDING_DIM}-dim")
+    print(f"  TDA Features: {TDA_DIM}-dim -> {TDA_HIDDEN_DIM}-dim")
+    print(f"  Fusion Dim: {FUSION_DIM}-dim")
     print(f"  CBAM Attention: {USE_CBAM}")
-    print(f"  Batch Size: {BATCH_SIZE}")
-    print(f"  Learning Rate: {LEARNING_RATE}")
-    print(f"  Triplet Margin: {MARGIN}")
     print(f"\nTraining:")
+    print(f"  Batch Size: {BATCH_SIZE}")
     print(f"  Epochs: {NUM_EPOCHS}")
-    print(f"  Early Stopping: patience={EARLY_STOPPING_PATIENCE}")
-    print(f"  Max Images/Identity: {'ALL' if MAX_IMAGES_PER_IDENTITY_TRAIN is None else MAX_IMAGES_PER_IDENTITY_TRAIN}")
-    print(f"\nTDA Settings:")
-    print(f"  Enabled: {USE_TDA}")
-    print(f"  Loss Weight: {TDA_LOSS_WEIGHT}")
-    print(f"  Apply Every N Batches: {TDA_APPLY_EVERY_N_BATCHES}")
-    print(f"  Target Entropy: {TDA_TARGET_ENTROPY}")
-    print(f"\nVerification:")
-    print(f"  Threshold: {OPTIMAL_THRESHOLD}")
+    print(f"  Learning Rate: {LEARNING_RATE}")
+    print(f"  Weight Decay: {WEIGHT_DECAY}")
+    print(f"  Triplet Margin: {MARGIN}")
+    print(f"  Dropout: {DROPOUT}")
+    print(f"  LR Scheduler: {LR_SCHEDULER['type']}")
+    print(f"\nTDA (Persistence Images):")
+    print(f"  Resolution: {TDA_CONFIG['resolution']}")
+    print(f"  Bandwidth: {TDA_CONFIG['bandwidth']}")
+    print(f"\nPaths:")
+    print(f"  Model: {MODEL_PATH}")
+    print(f"  TDA Cache: {TDA_CACHE_DIR}")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     print_config()

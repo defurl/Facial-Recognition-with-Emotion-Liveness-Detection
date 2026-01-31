@@ -11,9 +11,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-from config import (
+from .config import (
     IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD, BATCH_SIZE,
-    TRAIN_DIR, VAL_DIR, MAX_IMAGES_PER_IDENTITY_TRAIN, VERIFICATION_VAL_PAIRS
+    TRAIN_DIR, VAL_DIR, VERIFICATION_VAL_PAIRS
 )
 
 
@@ -114,6 +114,80 @@ class TripletDataset(Dataset):
         return anchor_img, positive_img, negative_img
 
 
+class TripletDatasetWithTDA(Dataset):
+    """
+    Triplet dataset that also returns precomputed TDA features.
+    
+    For dual-stream training where CNN processes images and TDA features
+    are looked up from a precomputed cache.
+    """
+    
+    def __init__(self, image_paths, labels, label_map, tda_cache, transform=None):
+        """
+        Args:
+            image_paths: List of image paths
+            labels: List of labels
+            label_map: Dict mapping label -> list of indices
+            tda_cache: TDAFeatureCache object for looking up TDA features
+            transform: Image transform
+        """
+        self.image_paths = [str(p) for p in image_paths]  # Convert to strings for cache lookup
+        self.labels = np.array(labels)
+        self.label_map = label_map
+        self.tda_cache = tda_cache
+        self.transform = transform
+        self.unique_labels = list(self.label_map.keys())
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, index):
+        # Anchor
+        anchor_path = self.image_paths[index]
+        anchor_label = self.labels[index]
+
+        # Positive (same label as anchor)
+        positive_indices = self.label_map[anchor_label]
+        positive_index = random.choice(positive_indices)
+        while positive_index == index and len(positive_indices) > 1:
+            positive_index = random.choice(positive_indices)
+        positive_path = self.image_paths[positive_index]
+
+        # Negative (different label)
+        negative_label = random.choice(self.unique_labels)
+        while negative_label == anchor_label:
+            negative_label = random.choice(self.unique_labels)
+        negative_index = random.choice(self.label_map[negative_label])
+        negative_path = self.image_paths[negative_index]
+
+        # Load images
+        anchor_img = Image.open(anchor_path).convert('RGB')
+        positive_img = Image.open(positive_path).convert('RGB')
+        negative_img = Image.open(negative_path).convert('RGB')
+
+        # Apply transforms
+        if self.transform:
+            anchor_img = self.transform(anchor_img)
+            positive_img = self.transform(positive_img)
+            negative_img = self.transform(negative_img)
+        
+        # Get TDA features from cache
+        anchor_tda = self.tda_cache.get(anchor_path)
+        positive_tda = self.tda_cache.get(positive_path)
+        negative_tda = self.tda_cache.get(negative_path)
+        
+        # Handle cache miss (shouldn't happen if precomputed correctly)
+        if anchor_tda is None or positive_tda is None or negative_tda is None:
+            raise KeyError(f"TDA features not found in cache for one of: {anchor_path}, {positive_path}, {negative_path}")
+        
+        # Convert to tensors
+        anchor_tda = torch.from_numpy(anchor_tda).float()
+        positive_tda = torch.from_numpy(positive_tda).float()
+        negative_tda = torch.from_numpy(negative_tda).float()
+        
+        return (anchor_img, anchor_tda), (positive_img, positive_tda), (negative_img, negative_tda)
+
+
 # ============= Data Loading Functions =============
 
 def load_classification_data(data_dir, max_images_per_identity=None):
@@ -196,6 +270,71 @@ def create_dataloaders():
         'triplet_val_loader': triplet_val_loader,
         'train_num_classes': train_num_classes,
         'val_num_classes': val_num_classes
+    }
+
+
+def create_tda_dataloaders(tda_cache_dir=None):
+    """
+    Create triplet dataloaders with TDA features.
+    
+    Args:
+        tda_cache_dir: Directory containing TDA cache files (*.npz)
+                       If None, uses default outputs/tda_cache
+    
+    Returns:
+        Dict with keys: triplet_train_loader, triplet_val_loader,
+        train_num_classes, val_num_classes, tda_cache_train, tda_cache_val
+    """
+    from config import OUTPUT_DIR
+    from tda_features import TDAFeatureCache
+    
+    if tda_cache_dir is None:
+        tda_cache_dir = OUTPUT_DIR / "tda_cache"
+    
+    # Load TDA caches
+    print("Loading TDA feature caches...")
+    tda_cache_train = TDAFeatureCache(tda_cache_dir / "tda_train.npz")
+    tda_cache_val = TDAFeatureCache(tda_cache_dir / "tda_val.npz")
+    print(f"  Train TDA cache: {len(tda_cache_train.paths)} images")
+    print(f"  Val TDA cache: {len(tda_cache_val.paths)} images")
+    
+    # Load image data
+    print("Loading training data...")
+    train_paths, train_labels, train_label_map, train_num_classes = load_classification_data(
+        TRAIN_DIR, max_images_per_identity=MAX_IMAGES_PER_IDENTITY_TRAIN
+    )
+    print(f"  Training: {len(train_paths)} images from {train_num_classes} identities")
+    
+    print("Loading validation data...")
+    val_paths, val_labels, val_label_map, val_num_classes = load_classification_data(VAL_DIR)
+    print(f"  Validation: {len(val_paths)} images from {val_num_classes} identities")
+    
+    train_transform, val_transform = get_transforms()
+    
+    # Create TDA-aware triplet datasets
+    triplet_train_dataset = TripletDatasetWithTDA(
+        train_paths, train_labels, train_label_map, tda_cache_train, train_transform
+    )
+    triplet_val_dataset = TripletDatasetWithTDA(
+        val_paths, val_labels, val_label_map, tda_cache_val, val_transform
+    )
+    
+    triplet_train_loader = DataLoader(
+        triplet_train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=4, pin_memory=True
+    )
+    triplet_val_loader = DataLoader(
+        triplet_val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=4, pin_memory=True
+    )
+    
+    return {
+        'triplet_train_loader': triplet_train_loader,
+        'triplet_val_loader': triplet_val_loader,
+        'train_num_classes': train_num_classes,
+        'val_num_classes': val_num_classes,
+        'tda_cache_train': tda_cache_train,
+        'tda_cache_val': tda_cache_val,
     }
 
 
