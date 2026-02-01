@@ -1,0 +1,38 @@
+[
+  {
+    "config_name": "filt_distance",
+    "config": "filt_distance(H0, 20x20, bw=50.0)",
+    "tda_dim": 400,
+    "best_val_acc": 0.625,
+    "final_train_acc": 0.646,
+    "final_val_acc": 0.625,
+    "final_gap": 0.02100000000000002,
+    "total_params": 690176,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.468714419811491,
+        "train_acc": 0.548,
+        "val_loss": 0.4770567696541548,
+        "val_acc": 0.555,
+        "time": 151.59175300598145
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.42477862465949284,
+        "train_acc": 0.6115,
+        "val_loss": 0.4422409124672413,
+        "val_acc": 0.595,
+        "time": 155.18902349472046
+      },
+      {
+        "epoch": 3,
+        "train_loss": 0.3960439870281825,
+        "train_acc": 0.646,
+        "val_loss": 0.4265549723058939,
+        "val_acc": 0.625,
+        "time": 151.68513369560242
+      }
+    ]
+  }
+]
