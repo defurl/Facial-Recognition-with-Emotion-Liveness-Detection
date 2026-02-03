@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-02-04T00:07:20.355454",
+  "results": [
+    {
+      "name": "CNN Baseline",
+      "status": "success",
+      "auc": 0.9348569600000001,
+      "val_acc": null,
+      "is_baseline": true
+    },
+    {
+      "name": "TDA Regularized (\u03bb=0.10)",
+      "status": "success",
+      "auc": 0.9372408000000001,
+      "val_acc": null,
+      "is_baseline": true
+    },
+    {
+      "name": "Exp A1 (\u03bb=0.05)",
+      "status": "success",
+      "auc": 0.9383032000000001,
+      "val_acc": 0.945375,
+      "is_baseline": false
+    },
+    {
+      "name": "Exp A2 (\u03bb=0.02)",
+      "status": "success",
+      "auc": 0.93725072,
+      "val_acc": 0.94425,
+      "is_baseline": false
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+[2026-02-03 15:55:37] ======================================================================
+[2026-02-03 15:55:37] EXPERIMENT: exp_a2_lambda_002
+[2026-02-03 15:55:37] ======================================================================
+[2026-02-03 15:55:37] TDA Regularization with λ=0.02, Extended Training
+[2026-02-03 15:55:37] Output directory: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/experiments/exp_a2_lambda_002/outputs
+[2026-02-03 15:55:37] 
+Configuration:
+[2026-02-03 15:55:37]   Epochs: 50
+[2026-02-03 15:55:37]   Early stopping patience: 15
+[2026-02-03 15:55:37]   Learning rate: 0.001
+[2026-02-03 15:55:37]   TDA lambda: 0.02
+[2026-02-03 15:55:37]   TDA warmup epochs: 0
+[2026-02-03 15:55:37]   Device: cuda
+[2026-02-03 15:55:37] 
+----------------------------------------------------------------------
+[2026-02-03 15:55:37] Loading data...
+[2026-02-03 15:55:39] Training: 380638 images from 4000 identities
+[2026-02-03 15:55:39] Validation: 8000 images from 4000 identities
+[2026-02-03 15:55:39] Loading TDA cache from /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/tda_cache/tda_train.npz...
+[2026-02-03 15:55:46] TDA features shape: (380638, 400)
+[2026-02-03 15:55:48] Matched 380638/380638 training images to TDA cache
+[2026-02-03 15:55:48] Train batches: 2974
+[2026-02-03 15:55:48] Val batches: 63
+[2026-02-03 15:55:48] 
+----------------------------------------------------------------------
+[2026-02-03 15:55:48] Initializing CNN model...
+[2026-02-03 15:55:48] Loading pretrained CNN weights from /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/outputs/best_cnn_baseline_model.pth
+[2026-02-03 15:55:49] ✓ Pretrained weights loaded successfully
+[2026-02-03 15:55:49] Total parameters: 1,496,488
+[2026-02-03 15:55:49] 
+----------------------------------------------------------------------
+[2026-02-03 15:55:49] Starting training for 50 epochs...
+[2026-02-03 15:55:49] TDA regularization: Enabled
+[2026-02-03 15:55:49] ----------------------------------------------------------------------
+[2026-02-03 15:59:18] 
+Epoch 1/50 | Time: 209.1s | LR: 9.89e-05
+[2026-02-03 15:59:18]   Losses - Total: 0.0840 | Triplet: 0.0783 | TDA: 0.2859 (λ=0.020)
+[2026-02-03 15:59:18]   Train Acc: 95.34% | Val Acc: 94.16% | Gap: +1.18%
+[2026-02-03 15:59:18]   ✓ New best model saved (val_acc: 94.16%)
+[2026-02-03 16:02:54] 
+Epoch 2/50 | Time: 215.9s | LR: 9.57e-05
+[2026-02-03 16:02:54]   Losses - Total: 0.0823 | Triplet: 0.0765 | TDA: 0.2857 (λ=0.020)
+[2026-02-03 16:02:54]   Train Acc: 95.48% | Val Acc: 94.42% | Gap: +1.06%
+[2026-02-03 16:02:54]   ✓ New best model saved (val_acc: 94.42%)
+[2026-02-03 16:06:34] 
+Epoch 3/50 | Time: 220.4s | LR: 9.05e-05
+[2026-02-03 16:06:34]   Losses - Total: 0.0820 | Triplet: 0.0763 | TDA: 0.2859 (λ=0.020)
+[2026-02-03 16:06:34]   Train Acc: 95.49% | Val Acc: 94.04% | Gap: +1.45%
+[2026-02-03 16:06:34]   No improvement (1/15)
+[2026-02-03 16:10:08] 
+Epoch 4/50 | Time: 214.2s | LR: 8.35e-05
+[2026-02-03 16:10:08]   Losses - Total: 0.0814 | Triplet: 0.0757 | TDA: 0.2862 (λ=0.020)
+[2026-02-03 16:10:08]   Train Acc: 95.55% | Val Acc: 93.61% | Gap: +1.93%
+[2026-02-03 16:10:08]   No improvement (2/15)
+[2026-02-03 16:13:45] 
+Epoch 5/50 | Time: 216.9s | LR: 7.50e-05
+[2026-02-03 16:13:45]   Losses - Total: 0.0802 | Triplet: 0.0745 | TDA: 0.2859 (λ=0.020)
+[2026-02-03 16:13:45]   Train Acc: 95.65% | Val Acc: 94.20% | Gap: +1.45%
+[2026-02-03 16:13:45]   No improvement (3/15)
+[2026-02-03 16:17:24] 
+Epoch 6/50 | Time: 218.5s | LR: 6.55e-05
+[2026-02-03 16:17:24]   Losses - Total: 0.0793 | Triplet: 0.0735 | TDA: 0.2855 (λ=0.020)
+[2026-02-03 16:17:24]   Train Acc: 95.73% | Val Acc: 94.39% | Gap: +1.34%
+[2026-02-03 16:17:24]   No improvement (4/15)
+[2026-02-03 16:20:58] 
+Epoch 7/50 | Time: 214.1s | LR: 5.52e-05
+[2026-02-03 16:20:58]   Losses - Total: 0.0786 | Triplet: 0.0728 | TDA: 0.2858 (λ=0.020)
+[2026-02-03 16:20:58]   Train Acc: 95.81% | Val Acc: 93.97% | Gap: +1.84%
+[2026-02-03 16:20:58]   No improvement (5/15)
+[2026-02-03 16:24:35] 
+Epoch 8/50 | Time: 217.1s | LR: 4.48e-05
+[2026-02-03 16:24:35]   Losses - Total: 0.0777 | Triplet: 0.0720 | TDA: 0.2861 (λ=0.020)
+[2026-02-03 16:24:35]   Train Acc: 95.87% | Val Acc: 94.08% | Gap: +1.80%
+[2026-02-03 16:24:35]   No improvement (6/15)
+[2026-02-03 16:28:14] 
+Epoch 9/50 | Time: 218.9s | LR: 3.45e-05
+[2026-02-03 16:28:14]   Losses - Total: 0.0771 | Triplet: 0.0714 | TDA: 0.2861 (λ=0.020)
+[2026-02-03 16:28:14]   Train Acc: 95.95% | Val Acc: 94.10% | Gap: +1.85%
+[2026-02-03 16:28:14]   No improvement (7/15)
+[2026-02-03 16:31:54] 
+Epoch 10/50 | Time: 220.4s | LR: 2.50e-05
+[2026-02-03 16:31:54]   Losses - Total: 0.0769 | Triplet: 0.0712 | TDA: 0.2857 (λ=0.020)
+[2026-02-03 16:31:54]   Train Acc: 95.93% | Val Acc: 94.21% | Gap: +1.71%
+[2026-02-03 16:31:54]   No improvement (8/15)
+[2026-02-03 16:35:27] 
+Epoch 11/50 | Time: 212.7s | LR: 1.65e-05
+[2026-02-03 16:35:27]   Losses - Total: 0.0761 | Triplet: 0.0703 | TDA: 0.2858 (λ=0.020)
+[2026-02-03 16:35:27]   Train Acc: 96.00% | Val Acc: 94.24% | Gap: +1.76%
+[2026-02-03 16:35:27]   No improvement (9/15)
+[2026-02-03 16:38:58] 
+Epoch 12/50 | Time: 211.4s | LR: 9.55e-06
+[2026-02-03 16:38:58]   Losses - Total: 0.0756 | Triplet: 0.0699 | TDA: 0.2855 (λ=0.020)
+[2026-02-03 16:38:58]   Train Acc: 96.06% | Val Acc: 94.00% | Gap: +2.06%
+[2026-02-03 16:38:58]   No improvement (10/15)
+[2026-02-03 16:42:30] 
+Epoch 13/50 | Time: 211.3s | LR: 4.32e-06
+[2026-02-03 16:42:30]   Losses - Total: 0.0748 | Triplet: 0.0691 | TDA: 0.2860 (λ=0.020)
+[2026-02-03 16:42:30]   Train Acc: 96.14% | Val Acc: 94.26% | Gap: +1.87%
+[2026-02-03 16:42:30]   No improvement (11/15)
+[2026-02-03 16:46:09] 
+Epoch 14/50 | Time: 219.0s | LR: 1.09e-06
+[2026-02-03 16:46:09]   Losses - Total: 0.0744 | Triplet: 0.0687 | TDA: 0.2863 (λ=0.020)
+[2026-02-03 16:46:09]   Train Acc: 96.15% | Val Acc: 93.96% | Gap: +2.19%
+[2026-02-03 16:46:09]   No improvement (12/15)
+[2026-02-03 16:49:39] 
+Epoch 15/50 | Time: 210.8s | LR: 1.00e-04
+[2026-02-03 16:49:39]   Losses - Total: 0.0732 | Triplet: 0.0674 | TDA: 0.2866 (λ=0.020)
+[2026-02-03 16:49:39]   Train Acc: 96.23% | Val Acc: 93.84% | Gap: +2.39%
+[2026-02-03 16:49:39]   No improvement (13/15)
+[2026-02-03 16:53:11] 
+Epoch 16/50 | Time: 211.7s | LR: 9.97e-05
+[2026-02-03 16:53:11]   Losses - Total: 0.0716 | Triplet: 0.0658 | TDA: 0.2858 (λ=0.020)
+[2026-02-03 16:53:11]   Train Acc: 96.38% | Val Acc: 93.59% | Gap: +2.79%
+[2026-02-03 16:53:11]   No improvement (14/15)
+[2026-02-03 16:56:43] 
+Epoch 17/50 | Time: 211.8s | LR: 9.89e-05
+[2026-02-03 16:56:43]   Losses - Total: 0.0723 | Triplet: 0.0666 | TDA: 0.2861 (λ=0.020)
+[2026-02-03 16:56:43]   Train Acc: 96.24% | Val Acc: 94.14% | Gap: +2.10%
+[2026-02-03 16:56:43]   No improvement (15/15)
+[2026-02-03 16:56:43] 
+Early stopping triggered after 17 epochs
+[2026-02-03 16:56:43] 
+======================================================================
+[2026-02-03 16:56:43] TRAINING COMPLETE
+[2026-02-03 16:56:43] ======================================================================
+[2026-02-03 16:56:43] 
+Best validation accuracy: 94.42%
+[2026-02-03 16:56:43] Model saved to: /home/hieutran/Facial-Recognition-with-Emotion-Liveness-Detection/experiments/exp_a2_lambda_002/outputs/best_model.pth
+[2026-02-03 16:56:43] 
+----------------------------------------------------------------------
+[2026-02-03 16:56:43] Comparison with Baselines:
+[2026-02-03 16:56:43] ----------------------------------------------------------------------
+[2026-02-03 16:56:43]   CNN Baseline:         94.15%
+[2026-02-03 16:56:43]   TDA Regularized (λ=0.10): 94.45%
+[2026-02-03 16:56:43]   Exp A1 (λ=0.05):      94.16%
+[2026-02-03 16:56:43]   This experiment:      94.42%
+[2026-02-03 16:56:43]   ✓ IMPROVEMENT over baseline: +0.28%
