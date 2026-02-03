@@ -11,10 +11,20 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-from .config import (
-    IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD, BATCH_SIZE,
-    TRAIN_DIR, VAL_DIR, VERIFICATION_VAL_PAIRS
-)
+# Try relative import first (when used as package), fall back to absolute
+try:
+    from .config import (
+        IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD, BATCH_SIZE,
+        TRAIN_DIR, VAL_DIR, VERIFICATION_VAL_PAIRS
+    )
+except ImportError:
+    from config import (
+        IMG_SIZE, IMAGENET_MEAN, IMAGENET_STD, BATCH_SIZE,
+        TRAIN_DIR, VAL_DIR, VERIFICATION_VAL_PAIRS
+    )
+
+# Maximum images per identity for training (None = no limit)
+MAX_IMAGES_PER_IDENTITY_TRAIN = None
 
 
 # ============= Data Transforms =============

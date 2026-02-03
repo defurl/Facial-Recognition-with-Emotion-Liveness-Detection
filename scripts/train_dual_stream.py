@@ -29,7 +29,7 @@ import numpy as np
 
 from config import (
     DEVICE, LEARNING_RATE, RANDOM_SEED, OUTPUT_DIR,
-    WEIGHT_DECAY, USE_LR_SCHEDULER
+    WEIGHT_DECAY
 )
 from models import DualStreamFaceNet, FaceEmbeddingCNN, get_loss_functions, count_parameters
 from data_loader import create_tda_dataloaders
@@ -39,11 +39,17 @@ from data_loader import create_tda_dataloaders
 NUM_EPOCHS = 20
 EMBEDDING_DIM = 256
 TDA_DIM = 400
-TDA_HIDDEN_DIM = 128
+FUSION_STRATEGY = 'attention'  # Options: 'attention' (best), 'gated', 'residual', 'concat'
+FUSION_HIDDEN_DIM = 384
 DROPOUT = 0.3
-PRETRAINED_CNN_PATH = OUTPUT_DIR / "best_tda_metric_model.pth"  # Use existing best model
-MODEL_SAVE_PATH = OUTPUT_DIR / "best_dual_stream_model.pth"
-HISTORY_SAVE_PATH = OUTPUT_DIR / "dual_stream_training_history.json"
+USE_LR_SCHEDULER = True  # Use ReduceLROnPlateau
+PRETRAINED_CNN_PATH = OUTPUT_DIR / "best_cnn_baseline_model.pth"  # CNN baseline weights
+USE_PRETRAINED = True  # Whether to use pretrained CNN weights
+
+# Dynamic output paths based on fusion strategy and pretrained status
+pretrained_suffix = "_pretrained" if USE_PRETRAINED else "_scratch"
+MODEL_SAVE_PATH = OUTPUT_DIR / f"best_dual_stream_{FUSION_STRATEGY}{pretrained_suffix}_model.pth"
+HISTORY_SAVE_PATH = OUTPUT_DIR / f"dual_stream_{FUSION_STRATEGY}{pretrained_suffix}_history.json"
 
 
 def set_seed(seed=RANDOM_SEED):
@@ -145,7 +151,8 @@ def main():
     print(f"  Weight decay: {WEIGHT_DECAY}")
     print(f"  Embedding dim: {EMBEDDING_DIM}")
     print(f"  TDA input dim: {TDA_DIM}")
-    print(f"  TDA hidden dim: {TDA_HIDDEN_DIM}")
+    print(f"  Fusion strategy: {FUSION_STRATEGY}")
+    print(f"  Fusion hidden dim: {FUSION_HIDDEN_DIM}")
     print(f"  Dropout: {DROPOUT}")
     print(f"  Device: {DEVICE}")
     print(f"  Use LR scheduler: {USE_LR_SCHEDULER}")
@@ -166,7 +173,7 @@ def main():
     print("Initializing model...")
     
     # Option 1: Initialize from pretrained CNN
-    if PRETRAINED_CNN_PATH.exists():
+    if USE_PRETRAINED and PRETRAINED_CNN_PATH.exists():
         print(f"Loading pretrained CNN from: {PRETRAINED_CNN_PATH}")
         cnn_model = FaceEmbeddingCNN(embedding_dim=EMBEDDING_DIM, num_classes=num_classes, use_cbam=True)
         cnn_model.load_state_dict(torch.load(PRETRAINED_CNN_PATH, map_location='cpu'))
@@ -176,18 +183,23 @@ def main():
             embedding_dim=EMBEDDING_DIM,
             num_classes=num_classes,
             tda_dim=TDA_DIM,
-            tda_hidden_dim=TDA_HIDDEN_DIM,
+            fusion_strategy=FUSION_STRATEGY,
+            fusion_hidden_dim=FUSION_HIDDEN_DIM,
             use_cbam=True,
             dropout=DROPOUT,
         )
+        print("  ✓ Loaded pretrained CNN backbone weights")
     else:
         # Option 2: Train from scratch
-        print("No pretrained CNN found, training from scratch...")
+        if USE_PRETRAINED:
+            print(f"Warning: Pretrained model not found at {PRETRAINED_CNN_PATH}")
+        print("Training from scratch...")
         model = DualStreamFaceNet(
             embedding_dim=EMBEDDING_DIM,
             num_classes=num_classes,
             tda_dim=TDA_DIM,
-            tda_hidden_dim=TDA_HIDDEN_DIM,
+            fusion_strategy=FUSION_STRATEGY,
+            fusion_hidden_dim=FUSION_HIDDEN_DIM,
             use_cbam=True,
             dropout=DROPOUT,
         )
