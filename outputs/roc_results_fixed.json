@@ -1,0 +1,8 @@
+{
+  "Triplet - Euclidean": {
+    "auc": 0.8945706565639622
+  },
+  "Triplet - Cosine": {
+    "auc": 0.8945707597932318
+  }
+}
