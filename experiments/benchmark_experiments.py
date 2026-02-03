@@ -33,6 +33,7 @@ from data_loader import load_classification_data, get_transforms
 
 # Experiments to benchmark
 EXPERIMENTS = [
+    # === Baselines ===
     {
         "name": "CNN Baseline",
         "model_path": PROJECT_ROOT / "outputs" / "best_cnn_baseline_model.pth",
@@ -43,6 +44,8 @@ EXPERIMENTS = [
         "model_path": PROJECT_ROOT / "outputs" / "best_tda_regularized_model.pth",
         "is_baseline": True,
     },
+    
+    # === Series A: Lambda Optimization (Intensity-based TDA) ===
     {
         "name": "Exp A1 (λ=0.05)",
         "model_path": PROJECT_ROOT / "experiments" / "exp_a1_lambda_005" / "outputs" / "best_model.pth",
@@ -55,6 +58,23 @@ EXPERIMENTS = [
         "history_path": PROJECT_ROOT / "experiments" / "exp_a2_lambda_002" / "outputs" / "training_history.json",
         "is_baseline": False,
     },
+    {
+        "name": "Exp A3 (λ=0.03)",
+        "model_path": PROJECT_ROOT / "experiments" / "exp_a3_lambda_003" / "outputs" / "best_model.pth",
+        "history_path": PROJECT_ROOT / "experiments" / "exp_a3_lambda_003" / "outputs" / "training_history.json",
+        "is_baseline": False,
+    },
+    
+    # === Series B: TDA Feature Engineering ===
+    {
+        "name": "Exp B3 (Edge TDA λ=0.05)",
+        "model_path": PROJECT_ROOT / "experiments" / "exp_b3_edge_tda" / "outputs" / "best_model.pth",
+        "history_path": PROJECT_ROOT / "experiments" / "exp_b3_edge_tda" / "outputs" / "training_history.json",
+        "is_baseline": False,
+    },
+    
+    # === Series D: Ensemble Methods ===
+    # Note: Exp D is ensemble evaluation only (no trained model), results stored separately
 ]
 
 

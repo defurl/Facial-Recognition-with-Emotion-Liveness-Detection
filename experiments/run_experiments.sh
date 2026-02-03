@@ -35,6 +35,9 @@ CONDA_ENV="face_recog"
 # Experiment directories
 EXP_A1_DIR="$SCRIPT_DIR/exp_a1_lambda_005"
 EXP_A2_DIR="$SCRIPT_DIR/exp_a2_lambda_002"
+EXP_A3_DIR="$SCRIPT_DIR/exp_a3_lambda_003"
+EXP_B3_DIR="$SCRIPT_DIR/exp_b3_edge_tda"
+EXP_D_DIR="$SCRIPT_DIR/exp_d_ensemble"
 
 # Colors for output
 RED='\033[0;31m'
@@ -54,16 +57,17 @@ echo ""
 # Function to check if experiment is already running
 check_running() {
     local exp_name=$1
-    if pgrep -f "$exp_name/train.py" > /dev/null 2>&1; then
+    if pgrep -f "$exp_name/train.py" > /dev/null 2>&1 || pgrep -f "$exp_name/evaluate.py" > /dev/null 2>&1; then
         return 0  # Running
     else
         return 1  # Not running
     fi
 }
 
-# Function to launch an experiment
+# Function to launch an experiment (training)
 launch_experiment() {
     local exp_dir=$1
+    local script_name=${2:-train.py}  # Default to train.py
     local exp_name=$(basename "$exp_dir")
     local log_file="$exp_dir/outputs/train.log"
     local nohup_file="$exp_dir/outputs/nohup.out"
@@ -78,9 +82,9 @@ launch_experiment() {
         return
     fi
     
-    # Check if train.py exists
-    if [ ! -f "$exp_dir/train.py" ]; then
-        echo -e "${RED}✗ train.py not found in $exp_dir${NC}"
+    # Check if script exists
+    if [ ! -f "$exp_dir/$script_name" ]; then
+        echo -e "${RED}✗ $script_name not found in $exp_dir${NC}"
         return
     fi
     
@@ -92,7 +96,7 @@ launch_experiment() {
     # Launch with nohup
     cd "$PROJECT_ROOT"
     nohup conda run -n "$CONDA_ENV" --no-capture-output \
-        python "$exp_dir/train.py" \
+        python "$exp_dir/$script_name" \
         > "$nohup_file" 2>&1 &
     
     local pid=$!
@@ -110,13 +114,21 @@ show_status() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BLUE}EXPERIMENT STATUS:${NC}"
     
-    for exp_dir in "$EXP_A1_DIR" "$EXP_A2_DIR"; do
+    for exp_dir in "$EXP_A1_DIR" "$EXP_A2_DIR" "$EXP_A3_DIR" "$EXP_B3_DIR" "$EXP_D_DIR"; do
         local exp_name=$(basename "$exp_dir")
-        if check_running "$exp_name"; then
-            local pid=$(pgrep -f "$exp_name/train.py" | head -1)
-            echo -e "  ${GREEN}● $exp_name${NC} - Running (PID: $pid)"
-        else
-            echo -e "  ${RED}○ $exp_name${NC} - Not running"
+        if [ -d "$exp_dir" ]; then
+            if check_running "$exp_name"; then
+                local pid=$(pgrep -f "$exp_name/train.py" | head -1)
+                [ -z "$pid" ] && pid=$(pgrep -f "$exp_name/evaluate.py" | head -1)
+                echo -e "  ${GREEN}● $exp_name${NC} - Running (PID: $pid)"
+            else
+                # Check if completed
+                if [ -f "$exp_dir/outputs/best_model.pth" ] || [ -f "$exp_dir/outputs/ensemble_results.json" ]; then
+                    echo -e "  ${BLUE}✓ $exp_name${NC} - Completed"
+                else
+                    echo -e "  ${RED}○ $exp_name${NC} - Not started"
+                fi
+            fi
         fi
     done
 }
@@ -126,10 +138,16 @@ if [ $# -eq 0 ]; then
     echo "Usage: $0 [exp1] [exp2] ... | all | status"
     echo ""
     echo "Available experiments:"
-    echo "  a1  - exp_a1_lambda_005 (λ=0.05, 30 epochs)"
-    echo "  a2  - exp_a2_lambda_002 (λ=0.02, 50 epochs)"
-    echo "  all - Run all experiments"
-    echo "  status - Show running experiments"
+    echo "  a1  - exp_a1_lambda_005 (λ=0.05, 30 epochs) [COMPLETED]"
+    echo "  a2  - exp_a2_lambda_002 (λ=0.02, 50 epochs) [COMPLETED]"
+    echo "  a3  - exp_a3_lambda_003 (λ=0.03, 30 epochs) [NEW]"
+    echo "  b3  - exp_b3_edge_tda   (Edge-based TDA) [NEW - requires precompute]"
+    echo "  d   - exp_d_ensemble    (Ensemble evaluation) [NEW - no training]"
+    echo "  all - Run a3, b3, d (new experiments only)"
+    echo "  status - Show experiment status"
+    echo ""
+    echo "Note for B3: Run precompute first:"
+    echo "  conda run -n face_recog python experiments/exp_b3_edge_tda/precompute_edge_tda.py"
     echo ""
     show_status
     exit 0
@@ -144,18 +162,31 @@ fi
 # Determine which experiments to run
 RUN_A1=false
 RUN_A2=false
+RUN_A3=false
+RUN_B3=false
+RUN_D=false
 
 for arg in "$@"; do
     case $arg in
         all)
-            RUN_A1=true
-            RUN_A2=true
+            RUN_A3=true
+            RUN_B3=true
+            RUN_D=true
             ;;
         a1|A1|exp_a1|exp_a1_lambda_005)
             RUN_A1=true
             ;;
         a2|A2|exp_a2|exp_a2_lambda_002)
             RUN_A2=true
+            ;;
+        a3|A3|exp_a3|exp_a3_lambda_003)
+            RUN_A3=true
+            ;;
+        b3|B3|exp_b3|exp_b3_edge_tda)
+            RUN_B3=true
+            ;;
+        d|D|exp_d|exp_d_ensemble)
+            RUN_D=true
             ;;
         *)
             echo -e "${RED}Unknown experiment: $arg${NC}"
@@ -166,11 +197,33 @@ done
 # Launch selected experiments
 if [ "$RUN_A1" = true ]; then
     launch_experiment "$EXP_A1_DIR"
-    sleep 2  # Small delay between launches
+    sleep 2
 fi
 
 if [ "$RUN_A2" = true ]; then
     launch_experiment "$EXP_A2_DIR"
+    sleep 2
+fi
+
+if [ "$RUN_A3" = true ]; then
+    launch_experiment "$EXP_A3_DIR"
+    sleep 2
+fi
+
+if [ "$RUN_B3" = true ]; then
+    # Check if edge TDA cache exists
+    if [ ! -f "$EXP_B3_DIR/outputs/tda_edge_train.npz" ]; then
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}⚠ B3 requires edge TDA precomputation first!${NC}"
+        echo -e "  Run: conda run -n face_recog python experiments/exp_b3_edge_tda/precompute_edge_tda.py"
+    else
+        launch_experiment "$EXP_B3_DIR"
+    fi
+    sleep 2
+fi
+
+if [ "$RUN_D" = true ]; then
+    launch_experiment "$EXP_D_DIR" "evaluate.py"
 fi
 
 echo ""
@@ -178,8 +231,7 @@ echo -e "${BLUE}================================================================
 echo -e "${GREEN}Experiments launched in background!${NC}"
 echo ""
 echo -e "${YELLOW}Monitor progress:${NC}"
-echo "  tail -f $EXP_A1_DIR/outputs/train.log"
-echo "  tail -f $EXP_A2_DIR/outputs/train.log"
+echo "  tail -f experiments/<exp_name>/outputs/train.log"
 echo ""
 echo -e "${YELLOW}Check GPU usage:${NC}"
 echo "  watch -n 1 nvidia-smi"
@@ -187,9 +239,8 @@ echo ""
 echo -e "${YELLOW}Check status:${NC}"
 echo "  $0 status"
 echo ""
-echo -e "${YELLOW}Stop experiments:${NC}"
-echo "  pkill -f 'exp_a1_lambda_005/train.py'"
-echo "  pkill -f 'exp_a2_lambda_002/train.py'"
+echo -e "${YELLOW}Stop all experiments:${NC}"
+echo "  pkill -f 'experiments/exp_.*train.py'"
 echo ""
 echo -e "${BLUE}You can now safely disconnect from SSH!${NC}"
 echo -e "${BLUE}======================================================================${NC}"

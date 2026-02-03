@@ -1,142 +1,145 @@
 # Path Forward: TDA Face Recognition Improvement Plan
 
-## Current State (2026-02-03)
+## Current State (Updated 2025-02-04)
 
-| Model | Val Acc | AUC | Status |
-|-------|---------|-----|--------|
-| CNN Baseline | 94.15% | 88.36% | ✓ Complete |
-| Attention Fusion (TDA input) | 94.03% | - | ✗ Worse than baseline |
-| **TDA Regularized** | **94.45%** | **89.46%** | ✓ **Current Best** |
+### Completed Experiments Results
 
-**Improvement achieved: +0.30% val acc, +1.10% AUC**
+| Model | Val Acc | AUC | Epoch Peak | Status |
+|-------|---------|-----|------------|--------|
+| CNN Baseline | 94.15% | 93.49% | - | ✓ Baseline |
+| TDA Regularized (λ=0.10) | 94.45% | 93.72% | - | ✓ Initial |
+| **Exp A1 (λ=0.05)** | **94.54%** | **93.83%** | 6 | ✓ **Current Best** |
+| Exp A2 (λ=0.02) | 94.42% | 93.73% | 2 | ✓ Complete |
 
----
+### Key Findings from A1/A2 Analysis
 
-## Priority Options for Further Improvement
+1. **λ=0.05 is optimal so far** - Better than both λ=0.10 (too aggressive) and λ=0.02 (too weak)
+2. **Early convergence** - A1 peaked at epoch 6, A2 peaked at epoch 2 (insufficient regularization)
+3. **Overfitting after peak** - Both experiments showed declining val acc after their peaks
+4. **AUC improvement correlates with λ** - Higher λ → better AUC (within reasonable range)
 
-### Option A: Optimize TDA Regularization Hyperparameters (High Priority)
-**Goal**: Squeeze more from current approach
-
-**Experiments**:
-1. **Lower λ** (0.01-0.05) - Current 0.10 may be too aggressive
-2. **No warmup** - Start TDA from epoch 1
-3. **Cosine annealing for λ** - Dynamic λ that decreases over time
-4. **Longer training** - 50 epochs with patience-based early stopping
-
-**Expected Gain**: +0.1-0.3% val acc
-
-**Effort**: Low (hyperparameter tuning only)
+**Current improvement: +0.39% val acc, +0.34% AUC over CNN baseline**
 
 ---
 
-### Option B: TDA Feature Engineering (Medium Priority)
-**Goal**: Create better TDA features that capture identity-relevant information
+## Experiments In Progress / Planned
 
-**Experiments**:
-1. **Facial landmark-aligned TDA** 
-   - Extract TDA only from eye, nose, mouth regions
-   - These sub-regions have more identity-specific topology
-   
-2. **Multi-scale TDA**
-   - Current: single 64x64 filtration
-   - Try: 32x32, 64x64, 128x128 pyramid
-   
-3. **Edge-based TDA**
-   - Run TDA on Canny edge maps instead of raw intensity
-   - Edges capture facial structure better
+### Exp A3: Fine-tuned Lambda (λ=0.03) - CREATED, NOT RUN
+**Hypothesis**: Interpolate between A1 (0.05) and A2 (0.02) to find optimal λ
 
-**Expected Gain**: +0.2-0.5% val acc
+**Configuration**:
+- TDA_LAMBDA = 0.03
+- EARLY_STOPPING_PATIENCE = 12 (increased from 10)
+- Uses existing intensity-based TDA cache
 
-**Effort**: Medium (requires TDA recomputation ~2h each)
+**Script**: `experiments/exp_a3_lambda_003/train.py`
 
 ---
 
-### Option C: Alternative Regularization Losses (Medium Priority)
-**Goal**: Better TDA loss formulation
+### Exp B3: Edge-based TDA Features - CREATED, NOT RUN
+**Hypothesis**: TDA on Canny edge maps captures facial structure better than raw intensity
 
-**Experiments**:
-1. **Contrastive TDA Loss** (instead of triplet)
-   - Push different-person TDA features apart
-   - Current loss only pulls same-person together
-   
-2. **KL Divergence TDA Loss**
-   - Treat TDA as distribution, minimize divergence within identity
-   
-3. **Wasserstein Distance**
-   - Natural metric for persistence diagrams
-   - Theoretically grounded for TDA
+**Configuration**:
+- Canny edge detection (low=50, high=150) before TDA computation
+- Same λ=0.05 as A1 for fair comparison
+- Requires precomputation of edge TDA cache (~2h)
 
-**Expected Gain**: +0.1-0.4% val acc
-
-**Effort**: Medium (loss function modifications)
+**Scripts**:
+- Precompute: `experiments/exp_b3_edge_tda/precompute_edge_tda.py`
+- Train: `experiments/exp_b3_edge_tda/train.py`
 
 ---
 
-### Option D: Ensemble Approach (Low Priority)
-**Goal**: Combine CNN and TDA-regularized models
+### Exp D: Ensemble Evaluation - CREATED, NOT RUN
+**Hypothesis**: Combining CNN baseline + TDA-regularized embeddings improves verification
 
-**Method**:
-- Average embeddings: `final = α*CNN + (1-α)*TDA_reg`
-- Or concatenate and train fusion layer
+**Methods to test** (no training required):
+1. Simple average: `(CNN + A1) / 2`
+2. Weighted average: `α*CNN + (1-α)*A1` for α ∈ {0.3, 0.5, 0.7}
+3. Concatenation: `[CNN || A1]` (512-dim combined)
 
-**Expected Gain**: +0.1-0.2% val acc
-
-**Effort**: Low (inference-time fusion)
-
----
-
-### Option E: Larger Backbone (Higher Effort)
-**Goal**: Stronger base model for TDA to regularize
-
-**Options**:
-1. ResNet-50 backbone (current is ResNet-18 style)
-2. EfficientNet-B2/B3
-3. Vision Transformer (ViT-Small)
-
-**Expected Gain**: +1-3% val acc
-
-**Effort**: High (architecture change, full retraining)
+**Script**: `experiments/exp_d_ensemble/evaluate.py`
 
 ---
 
-## Recommended Path
+## Experiment Execution Order
 
-### Phase 1: Quick Wins (1-2 days)
-1. **A1**: Train with λ=0.05 instead of 0.10
-2. **A2**: Train without warmup (TDA from epoch 1)
-3. **D**: Try simple embedding averaging at inference
-
-### Phase 2: Feature Engineering (3-5 days)
-4. **B1**: Landmark-aligned TDA features
-5. **B3**: Edge-based TDA
-
-### Phase 3: Architecture (1 week+)
-6. **E**: Larger backbone (if significant improvement needed)
-
----
-
-## Success Criteria
-
-| Target | Metric | Current | Goal |
-|--------|--------|---------|------|
-| Minimum | Val Acc | 94.45% | >94.5% |
-| Good | Val Acc | 94.45% | >95.0% |
-| Excellent | AUC | 89.46% | >90.0% |
-
----
-
-## Next Action
-
-**Immediate**: Run Option A1 - TDA regularization with λ=0.05
-
+### Priority 1: Quick Wins (1-2 hours)
 ```bash
-# Modify train_tda_regularized.py:
-# tda_lambda = 0.05  (instead of 0.1)
-# warmup_epochs = 0   (no warmup)
+# Run Exp D first - no training, just inference
+./experiments/run_experiments.sh d
+
+# Run Exp A3 - uses existing TDA cache
+./experiments/run_experiments.sh a3
 ```
 
-This is the lowest-effort experiment that could yield quick improvement.
+### Priority 2: Feature Engineering (3-4 hours)
+```bash
+# Run Exp B3 - requires precomputation first
+./experiments/run_experiments.sh b3
+```
 
 ---
 
-*Plan created: 2026-02-03*
+## Success Criteria Progress
+
+| Target | Metric | Baseline | Current Best | Goal | Progress |
+|--------|--------|----------|--------------|------|----------|
+| Minimum | Val Acc | 94.15% | 94.54% | >94.5% | ✓ **ACHIEVED** |
+| Good | Val Acc | 94.15% | 94.54% | >95.0% | 78% (0.46% to go) |
+| Excellent | AUC | 93.49% | 93.83% | >94.0% | 67% (0.17% to go) |
+
+---
+
+## Analysis: Why λ=0.05 Works Best
+
+From training history analysis:
+
+| λ Value | Best Epoch | Final Loss | Peak Val Acc | Interpretation |
+|---------|------------|------------|--------------|----------------|
+| 0.10 | ~8 | 0.45 | 94.45% | TDA dominates, limits CNN learning |
+| 0.05 | 6 | 0.40 | 94.54% | **Balanced regularization** |
+| 0.02 | 2 | 0.35 | 94.42% | Too weak, peaks too early |
+
+**Recommendation**: λ in range [0.03, 0.05] appears optimal for this architecture.
+
+---
+
+## Next Actions
+
+1. **Immediate**: Run `./experiments/run_experiments.sh d` for ensemble evaluation
+2. **Today**: Run `./experiments/run_experiments.sh a3` for λ=0.03 experiment
+3. **Tomorrow**: Run `./experiments/run_experiments.sh b3` for edge-based TDA
+
+---
+
+## File Structure
+
+```
+experiments/
+├── exp_a1_lambda_005/      # ✓ COMPLETE - Best model
+│   ├── train.py
+│   └── outputs/
+│       ├── best_model.pth
+│       └── training_history.json
+├── exp_a2_lambda_002/      # ✓ COMPLETE
+│   ├── train.py
+│   └── outputs/
+├── exp_a3_lambda_003/      # ○ CREATED - Not run
+│   ├── train.py
+│   └── outputs/
+├── exp_b3_edge_tda/        # ○ CREATED - Requires precompute
+│   ├── precompute_edge_tda.py
+│   ├── train.py
+│   └── outputs/
+├── exp_d_ensemble/         # ○ CREATED - Not run
+│   ├── evaluate.py
+│   └── outputs/
+├── run_experiments.sh      # Launcher script
+└── benchmark_experiments.py
+```
+
+---
+
+*Last updated: 2025-02-04*
+*Best model: Exp A1 (λ=0.05) - 94.54% val acc, 93.83% AUC*
